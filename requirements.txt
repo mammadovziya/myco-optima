@@ -1,0 +1,2 @@
+# Kept for Streamlit Community Cloud and simple pip installs.
+-e .

@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "myco-optima"
+version = "0.1.0"
+description = "Explainable fungal fermentation media optimisation with COBRApy"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Myco Optima contributors" },
+]
+keywords = [
+  "fermentation",
+  "fungi",
+  "flux-balance-analysis",
+  "cobrapy",
+  "streamlit",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+  "anthropic>=0.49,<2",
+  "cobra>=0.31.1,<0.32",
+  "numpy>=1.26,<3",
+  "pandas>=2.2,<3",
+  "plotly>=5.24,<7",
+  "scipy>=1.13,<2",
+  "streamlit>=1.61,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<10",
+  "pytest-cov>=6,<8",
+  "ruff>=0.9,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/mammadovziya/myco-optima"
+Repository = "https://github.com/mammadovziya/myco-optima"
+Issues = "https://github.com/mammadovziya/myco-optima/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/myco_optima"]
+
+[tool.pytest.ini_options]
+addopts = "-q --disable-warnings"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]

@@ -1,0 +1,10 @@
+<svg width="520" height="110" viewBox="0 0 520 110" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="110" height="110" rx="28" fill="#082A24"/>
+  <circle cx="85" cy="26" r="4.5" fill="#B9F5D4"/>
+  <circle cx="94" cy="40" r="2.5" fill="#69D6AA"/>
+  <path d="M21 57C26 35 41 24 56 24C72 24 85 35 90 57H21Z" fill="#70E0B3"/>
+  <path d="M45 57H66C64 69 67 77 74 87C68 92 62 94 56 94C49 94 43 92 38 87C45 76 47 68 45 57Z" fill="#F7F2E8"/>
+  <path d="M29 57H83" stroke="#082A24" stroke-width="4" stroke-linecap="round"/>
+  <text x="137" y="53" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="34" font-weight="750" fill="#082A24">myco-optima</text>
+  <text x="139" y="78" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="550" letter-spacing="1.25" fill="#4C6D62">FERMENTATION OPTIMISATION</text>
+</svg>
