@@ -56,6 +56,26 @@ baseline. It reports local elasticity together with the lower and upper biomass
 responses used to calculate it. This is useful for ranking controllable factors,
 but it does not capture all nonlinear or high-order interactions.
 
+## Uploaded SBML models
+
+The custom workspace is intentionally separate from the four bundled models. It
+preserves uploaded identifiers and explicit FBC bounds, lets the user choose one
+reaction objective, and runs FBA plus optional FVA on a copy. No bundled medium,
+cost, organism, sensitivity or gene-rule metadata is attached to the upload.
+
+Before COBRApy parses a file, the loader rejects external entity declarations,
+missing or dangling flux-bound parameters, non-constant/non-finite bounds,
+inverted bounds, missing objectives and oversized networks. That preflight is
+important because a permissive SBML reader may otherwise replace an omitted
+bound with a large default and silently change the feasible space. The interface
+therefore accepts only explicit, auditable constraints.
+
+Uploaded files are held in the current Streamlit session and are not forwarded
+to Anthropic. FVA is limited to a user-selected set of at most 50 reactions and
+uses one process. The solver is given a 30-second timeout when its interface
+supports one. These are resource guardrails, not proof that every accepted model
+is biologically correct or numerically well conditioned.
+
 ## How “about 80 runs to 15” is calculated
 
 Four factors at three levels produce 3⁴ = 81 candidate conditions. Myco Optima

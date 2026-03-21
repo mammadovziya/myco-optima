@@ -12,6 +12,7 @@ import json
 import os
 from collections.abc import Callable
 from dataclasses import asdict, is_dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,46 @@ import streamlit as st
 CORE_AVAILABLE = False
 CORE_IMPORT_NOTE = "Scientific package not installed"
 AI_HELPER_AVAILABLE = False
+MODEL_UPLOAD_AVAILABLE = False
+
+try:
+    from myco_optima import __version__ as APP_VERSION
+except Exception:
+    APP_VERSION = "0.2.0"
+
+try:
+    from cobra import __version__ as COBRA_VERSION
+except Exception:
+    COBRA_VERSION = "unavailable"
+
+try:
+    from myco_optima.exports import dataframe_to_safe_csv as _safe_csv_bytes
+    from myco_optima.exports import strict_json_dumps as _strict_json_dumps
+except Exception:
+
+    def _safe_csv_bytes(frame: pd.DataFrame) -> bytes:
+        safe = frame.copy(deep=True)
+        for column in safe.columns:
+            if pd.api.types.is_object_dtype(safe[column]) or pd.api.types.is_string_dtype(
+                safe[column]
+            ):
+                safe[column] = safe[column].map(
+                    lambda value: (
+                        "'" + value
+                        if isinstance(value, str)
+                        and value
+                        and (
+                            value[0] in {"\t", "\r", "\n"}
+                            or value.lstrip(" \t\r\n").startswith(("=", "+", "-", "@"))
+                        )
+                        else value
+                    )
+                )
+        return safe.to_csv(index=False).encode("utf-8")
+
+    def _strict_json_dumps(payload: Any) -> str:
+        return json.dumps(payload, indent=2, default=str, allow_nan=False)
+
 
 try:
     from myco_optima.catalog import list_fungi as _core_list_fungi
@@ -68,6 +109,23 @@ except Exception:
     _CoreAIUnavailable = RuntimeError
     _core_generate_ai_insight = None
 
+try:
+    from myco_optima.model_io import DEFAULT_MAX_UPLOAD_BYTES as _CUSTOM_MODEL_MAX_BYTES
+    from myco_optima.model_io import MAX_FVA_REACTIONS as _CUSTOM_MODEL_MAX_FVA
+    from myco_optima.model_io import CustomModelAnalysisError as _CustomModelAnalysisError
+    from myco_optima.model_io import ModelUploadError as _ModelUploadError
+    from myco_optima.model_io import analyse_custom_model as _core_analyse_custom_model
+    from myco_optima.model_io import load_sbml_upload as _core_load_sbml_upload
+
+    MODEL_UPLOAD_AVAILABLE = True
+except Exception:
+    _CUSTOM_MODEL_MAX_BYTES = 5_000_000
+    _CUSTOM_MODEL_MAX_FVA = 50
+    _CustomModelAnalysisError = RuntimeError
+    _ModelUploadError = ValueError
+    _core_analyse_custom_model = None
+    _core_load_sbml_upload = None
+
 
 def _plain(value: Any) -> Any:
     """Convert typed core results into JSON-friendly Python objects."""
@@ -86,6 +144,13 @@ def _plain(value: Any) -> Any:
     return value
 
 
+def _display_text(value: Any, max_chars: int = 180) -> str:
+    """Bound untrusted display text while leaving source/export values unchanged."""
+
+    text = str(value)
+    return text if len(text) <= max_chars else text[: max_chars - 1] + "…"
+
+
 def _try_core(call: Callable[[], Any]) -> tuple[Any | None, str | None]:
     """Run a core call without allowing an evolving API to break the UI."""
     if not CORE_AVAILABLE:
@@ -97,6 +162,48 @@ def _try_core(call: Callable[[], Any]) -> tuple[Any | None, str | None]:
             None,
             f"Core result could not be adapted ({type(exc).__name__}); showing demo output.",
         )
+
+
+def _load_custom_model(filename: str, payload: bytes) -> Any:
+    """Parse one validated SBML payload without sharing it across user sessions."""
+
+    if not MODEL_UPLOAD_AVAILABLE or _core_load_sbml_upload is None:
+        raise RuntimeError("The custom model loader is unavailable.")
+    return _core_load_sbml_upload(payload, filename)
+
+
+_CUSTOM_ANALYSIS_STATE_KEYS = (
+    "custom_analysis",
+    "custom_analysis_signature",
+    "custom_analysis_metadata",
+    "custom_analysis_generated_at",
+)
+_CUSTOM_INSPECTION_STATE_KEYS = (
+    "custom_inspection",
+    "custom_inspection_identity",
+    "custom_active_upload_identity",
+)
+_CUSTOM_WIDGET_PREFIXES = (
+    "custom_objective_",
+    "custom_direction_",
+    "custom_include_fva_",
+    "custom_fva_reactions_",
+    "custom_fva_fraction_",
+)
+
+
+def _clear_custom_analysis_state() -> None:
+    for key in _CUSTOM_ANALYSIS_STATE_KEYS:
+        st.session_state.pop(key, None)
+
+
+def _clear_custom_model_state() -> None:
+    _clear_custom_analysis_state()
+    for key in _CUSTOM_INSPECTION_STATE_KEYS:
+        st.session_state.pop(key, None)
+    for key in list(st.session_state):
+        if key.startswith(_CUSTOM_WIDGET_PREFIXES):
+            st.session_state.pop(key, None)
 
 
 # -----------------------------------------------------------------------------
@@ -905,7 +1012,7 @@ def _run_gene_prediction(
 
 st.set_page_config(
     page_title="myco-optima · Fermentation optimisation",
-    page_icon="🍄",
+    page_icon=str(APP_DIR / "assets" / "myco-optima-mark.svg"),
     layout="wide",
     initial_sidebar_state="auto",
     menu_items={"About": "myco-optima · Edinburgh BioHackathon 2026"},
@@ -916,88 +1023,19 @@ def _inject_css() -> None:
     st.markdown(
         """
         <style>
-        :root {
-            --ink: #10251f;
-            --muted: #5c7169;
-            --forest: #082a24;
-            --mint: #70e0b3;
-            --line: rgba(15, 65, 52, 0.12);
-        }
-        .stApp { background: #f6f8f4; }
-        [data-testid="stSidebar"] { background: #eaf1ec; border-right: 1px solid var(--line); }
+        .stApp { background: #f7f8f6; }
+        [data-testid="stSidebar"] { background: #eef2ef; border-right: 1px solid #d8e0db; }
         [data-testid="stSidebar"] [data-testid="stImage"] img { max-width: 230px; }
-        [data-testid="stHeader"] { background: rgba(246, 248, 244, 0.82); backdrop-filter: blur(12px); }
-        .block-container { padding-top: 2.2rem; padding-bottom: 4rem; max-width: 1450px; }
-        h1, h2, h3 { color: var(--ink); letter-spacing: -0.025em; }
-        h1 { font-size: clamp(2.15rem, 4vw, 4rem) !important; line-height: 1.02 !important; }
-        h2 { margin-top: 0.4rem !important; }
-        p, label, [data-testid="stCaptionContainer"] { color: var(--muted); }
-        .hero {
-            position: relative; overflow: hidden; min-height: 285px; padding: 42px 46px;
-            border-radius: 30px; color: #f5fbf7;
-            background: radial-gradient(circle at 89% 18%, rgba(112,224,179,.28), transparent 27%),
-                        linear-gradient(135deg, #071f1b 0%, #0b3c31 72%, #155c48 100%);
-            box-shadow: 0 22px 70px rgba(8,42,36,.16); margin-bottom: 1.3rem;
-        }
-        .hero:after { content:""; position:absolute; width:190px; height:190px; right:7%; bottom:-120px;
-            border:1px solid rgba(185,245,212,.24); border-radius:50%; box-shadow: 0 0 0 28px rgba(185,245,212,.05), 0 0 0 60px rgba(185,245,212,.035); }
-        .eyebrow { display:inline-flex; align-items:center; gap:8px; text-transform:uppercase; letter-spacing:.13em;
-            font-weight:750; font-size:.72rem; color:#b9f5d4; margin-bottom:16px; }
-        .eyebrow:before { content:""; width:7px; height:7px; border-radius:50%; background:#f2c66d; }
-        .hero h1 { color:#f7fbf8 !important; max-width:800px; margin:.1rem 0 .8rem !important; }
-        .hero p { color:#cae4da; font-size:1.06rem; max-width:720px; line-height:1.65; margin:0; }
-        .hero-pills { display:flex; flex-wrap:wrap; gap:8px; margin-top:24px; }
-        .hero-pill { border:1px solid rgba(185,245,212,.24); background:rgba(255,255,255,.06); color:#e4f7ec;
-            border-radius:999px; padding:7px 12px; font-size:.78rem; font-weight:650; }
-        .section-kicker { color:#1b8f6b; font-weight:750; text-transform:uppercase; letter-spacing:.12em; font-size:.72rem; }
-        .soft-card, .kpi-card, .fungus-card {
-            background:rgba(255,255,255,.76); border:1px solid var(--line); border-radius:20px;
-            padding:20px; box-shadow:0 8px 30px rgba(8,42,36,.045); height:100%;
-        }
-        .kpi-card .label { color:#61766d; font-size:.78rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; }
-        .kpi-card .value { color:#10251f; font-size:1.75rem; font-weight:780; letter-spacing:-.035em; margin:7px 0 2px; }
-        .kpi-card .delta { color:#1b8f6b; font-size:.8rem; font-weight:650; }
-        .fungus-card .monogram { width:38px; height:38px; border-radius:12px; display:grid; place-items:center;
-            background:#e0f5e9; color:#11644d; font-size:1.15rem; margin-bottom:14px; }
-        .fungus-card h3 { font-size:1.03rem; margin:0 0 6px; }
-        .fungus-card p { font-size:.84rem; margin:0; line-height:1.45; }
-        .step { display:flex; gap:14px; align-items:flex-start; padding:14px 0; border-bottom:1px solid var(--line); }
-        .step:last-child { border-bottom:0; }
-        .step-number { flex:none; width:28px; height:28px; display:grid; place-items:center; border-radius:9px;
-            background:#dff4e8; color:#126247; font-size:.77rem; font-weight:800; }
-        .step strong { color:#173229; display:block; margin-bottom:2px; }
-        .step span { color:#687d74; font-size:.84rem; }
-        .status-strip { display:flex; align-items:flex-start; gap:12px; border:1px solid #bcdccb; background:#edf8f1;
-            border-radius:15px; padding:13px 15px; margin:.5rem 0 1.2rem; }
-        .status-dot { width:9px; height:9px; border-radius:50%; background:#22a879; margin-top:6px; flex:none; box-shadow:0 0 0 5px rgba(34,168,121,.10); }
-        .status-strip strong { color:#174c3c; font-size:.86rem; }
-        .status-strip span { color:#587167; font-size:.8rem; display:block; margin-top:2px; }
-        .warning-strip { border-left:4px solid #dda443; background:#fff8e9; color:#65502d; padding:13px 16px;
-            border-radius:0 13px 13px 0; margin:1rem 0; font-size:.86rem; line-height:1.5; }
-        .tag { display:inline-block; padding:5px 9px; border-radius:999px; background:#e4f4ea; color:#17684f;
-            font-size:.7rem; font-weight:750; letter-spacing:.03em; margin-right:5px; }
-        .model-card { border-radius:20px; padding:22px; color:#e7f6ee; background:linear-gradient(145deg,#0b3028,#124b3d); }
-        .model-card .big { font-size:1.6rem; font-weight:760; margin:.35rem 0; color:#fff; }
-        .model-card p { color:#bad8cc; margin:.2rem 0; }
-        [data-testid="stMetric"] { border:1px solid var(--line); background:rgba(255,255,255,.75); padding:15px 17px; border-radius:17px; }
-        [data-testid="stMetricValue"] { color:#10251f; font-weight:760; }
-        div[data-testid="stDataFrame"] { border:1px solid var(--line); border-radius:14px; overflow:hidden; }
-        .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button { border-radius:12px; min-height:42px; font-weight:680; }
-        .stButton > button[kind="primary"], .stFormSubmitButton > button[kind="primary"] {
-            background:#176f56; border-color:#176f56; color:#fff !important;
-            box-shadow:0 8px 20px rgba(27,143,107,.18);
-        }
-        .stButton > button[kind="primary"]:hover, .stFormSubmitButton > button[kind="primary"]:hover {
-            background:#105c47; border-color:#105c47; color:#fff !important;
-        }
-        div[data-baseweb="select"] > div, .stTextInput input, .stNumberInput input, .stTextArea textarea {
-            border-color:rgba(15,65,52,.15); border-radius:11px;
-        }
-        hr { border-color:var(--line) !important; }
+        [data-testid="stHeader"] { background: rgba(247, 248, 246, 0.92); }
+        .block-container { padding-top: 1.8rem; padding-bottom: 3.5rem; max-width: 1280px; }
+        h1, h2, h3 { color: #10251f; letter-spacing: -0.02em; }
+        h1 { font-size: clamp(2rem, 3vw, 3.1rem) !important; line-height: 1.08 !important; }
+        p, label, [data-testid="stCaptionContainer"] { color: #52665e; }
+        div[data-testid="stDataFrame"] { border: 1px solid #d8e0db; border-radius: 8px; overflow: hidden; }
+        [data-testid="stFileUploaderDropzone"] { background: #f2f6f3; border-color: #aebdb4; }
+        .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button { min-height: 40px; }
         @media (max-width: 780px) {
-            .block-container { padding-top:1rem; }
-            .hero { padding:30px 25px; min-height:auto; border-radius:22px; }
-            .hero p { font-size:.95rem; }
+            .block-container { padding-top: 1rem; }
         }
         </style>
         """,
@@ -1006,26 +1044,26 @@ def _inject_css() -> None:
 
 
 def _card(label: str, value: str, delta: str) -> None:
-    st.markdown(
-        f'<div class="kpi-card"><div class="label">{label}</div><div class="value">{value}</div><div class="delta">{delta}</div></div>',
-        unsafe_allow_html=True,
-    )
+    with st.container(border=True):
+        st.metric(label, value)
+        st.caption(delta)
 
 
 def _page_intro(kicker: str, title: str, body: str) -> None:
-    st.markdown(f'<div class="section-kicker">{kicker}</div>', unsafe_allow_html=True)
+    st.caption(kicker.upper())
     st.title(title)
-    st.write(body)
+    st.markdown(body)
+    st.divider()
 
 
 def _download_pair(
     frame: pd.DataFrame, filename: str, json_payload: dict[str, Any] | None = None
 ) -> None:
-    col_csv, col_json, spacer = st.columns([1, 1, 4])
+    col_csv, col_json = st.columns(2)
     with col_csv:
         st.download_button(
             "Download CSV",
-            frame.to_csv(index=False).encode("utf-8"),
+            _safe_csv_bytes(frame),
             file_name=f"{filename}.csv",
             mime="text/csv",
             width="stretch",
@@ -1034,7 +1072,7 @@ def _download_pair(
         payload = json_payload or {"records": frame.to_dict(orient="records")}
         st.download_button(
             "Download JSON",
-            json.dumps(payload, indent=2, default=str),
+            _strict_json_dumps(payload),
             file_name=f"{filename}.json",
             mime="application/json",
             width="stretch",
@@ -1043,16 +1081,16 @@ def _download_pair(
 
 def _model_notice(source: str, note: str | None = None) -> None:
     is_demo = "demo" in source.lower()
-    dot = "#D89A39" if is_demo else "#22A879"
     detail = note or (
         "Illustrative, deterministic outputs for interface exploration."
         if is_demo
         else "Results were returned by the installed scientific core."
     )
-    st.markdown(
-        f'<div class="status-strip"><span class="status-dot" style="background:{dot}"></span><div><strong>{source}</strong><span>{detail}</span></div></div>',
-        unsafe_allow_html=True,
-    )
+    message = f"**{source}** — {detail}"
+    if is_demo:
+        st.warning(message)
+    else:
+        st.info(message)
 
 
 def _plot_layout(fig: go.Figure, height: int = 390) -> go.Figure:
@@ -1134,7 +1172,7 @@ with st.sidebar:
     if LOGO_PATH.exists():
         st.image(str(LOGO_PATH), width="stretch")
     else:
-        st.markdown("## 🍄 myco-optima")
+        st.markdown("## myco-optima")
     st.caption("Fungal Fermentation Optimisation Tool · 2026")
     st.markdown("---")
 
@@ -1142,59 +1180,49 @@ with st.sidebar:
         "Workspace",
         [
             "Overview",
-            "Media Optimizer",
+            "Custom Model",
+            "Media Optimiser",
             "Sensitivity & DoE",
             "Gene–Media Explorer",
-            "AI Interpretation & About",
+            "Interpretation & Methods",
         ],
-        label_visibility="collapsed",
+        help="Choose a modelling workflow.",
     )
 
-    st.markdown("---")
-    st.markdown("##### Shared scenario")
-    fungus_name_to_id = {item["name"]: fungus_id for fungus_id, item in catalog.items()}
-    chosen_name = st.selectbox(
-        "Organism",
-        list(fungus_name_to_id),
-        index=list(fungus_name_to_id).index(catalog[st.session_state.fungus_id]["name"]),
-    )
-    st.session_state.fungus_id = fungus_name_to_id[chosen_name]
-    st.session_state.objective = "Biomass productivity"
-    st.markdown("**Optimisation objective**  ")
-    st.caption("Biomass productivity · reduced-order biomass flux")
     process_mode = "Aerobic steady-state surrogate"
-    st.caption("Process scope · aerobic steady-state surrogate")
+    if page != "Custom Model":
+        with st.expander("Curated scenario", expanded=True):
+            fungus_name_to_id = {item["name"]: fungus_id for fungus_id, item in catalog.items()}
+            chosen_name = st.selectbox(
+                "Organism",
+                list(fungus_name_to_id),
+                index=list(fungus_name_to_id).index(catalog[st.session_state.fungus_id]["name"]),
+            )
+            st.session_state.fungus_id = fungus_name_to_id[chosen_name]
+            st.session_state.objective = "Biomass productivity"
+            st.caption("Objective · biomass productivity")
+            st.caption("Scope · aerobic steady-state surrogate")
+    else:
+        st.caption("Upload controls and model provenance appear in the custom workspace.")
 
     st.markdown("---")
-    badge_label = "CORE CONNECTED" if CORE_AVAILABLE else "DEMO MODEL"
-    badge_colour = "#17684f" if CORE_AVAILABLE else "#9b6822"
-    badge_bg = "#dff4e8" if CORE_AVAILABLE else "#fff0cd"
-    st.markdown(
-        f'<span class="tag" style="color:{badge_colour};background:{badge_bg}">{badge_label}</span>',
-        unsafe_allow_html=True,
-    )
+    if CORE_AVAILABLE:
+        st.success("Scientific core connected")
+    else:
+        st.warning("Demo model active")
     st.caption(CORE_IMPORT_NOTE)
-    st.caption("v0.1 · Edinburgh BioHackathon 2026")
+    st.caption("v0.2 · Edinburgh BioHackathon 2026")
 
 
 # Pages -----------------------------------------------------------------------
 
 if page == "Overview":
-    st.markdown(
-        """
-        <div class="hero">
-          <div class="eyebrow">Engineer-first decision support</div>
-          <h1>Better fungal media, fewer experimental rounds.</h1>
-          <p>Explore how carbon, nitrogen, oxygen and genotype may shape fermentation performance—then turn the most informative regions into a focused wet-lab plan.</p>
-          <div class="hero-pills">
-            <span class="hero-pill">Flux Balance Analysis</span>
-            <span class="hero-pill">Flux Variability Analysis</span>
-            <span class="hero-pill">Sensitivity-led DoE</span>
-            <span class="hero-pill">Gene–media hypotheses</span>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    _page_intro(
+        "Model workspace",
+        "Fungal fermentation, from model to experiment",
+        "Choose a curated fungal surrogate or bring a COBRA-compatible SBML reconstruction. "
+        "Use one traceable workspace to inspect feasible flux, rank media constraints and "
+        "prepare a focused follow-up design.",
     )
 
     col1, col2, col3, col4 = st.columns(4)
@@ -1207,54 +1235,496 @@ if page == "Overview":
     with col4:
         _card("Workflow", "Minutes", "From medium to ranked hypotheses")
 
-    st.markdown("### Choose a chassis, keep the workflow consistent")
+    st.subheader("Curated starting models")
+    st.caption("Fast, transparent teaching surrogates for exploring the workflow.")
     fungus_cols = st.columns(4)
-    icons = ["◒", "◎", "⌁", "◉"]
-    for column, icon, (_, fungus) in zip(fungus_cols, icons, catalog.items(), strict=True):
-        with column:
-            st.markdown(
-                f'<div class="fungus-card"><div class="monogram">{icon}</div><h3><i>{fungus["name"]}</i></h3><p>{fungus["role"]}<br><br>Reference: {fungus["temperature"]:.0f} °C · pH {fungus["ph"]:.1f}</p></div>',
-                unsafe_allow_html=True,
-            )
+    for column, (_, fungus) in zip(fungus_cols, catalog.items(), strict=True):
+        with column, st.container(border=True):
+            st.markdown(f"**_{fungus['name']}_**")
+            st.caption(fungus["role"])
+            st.write(f"{fungus['temperature']:.0f} °C · pH {fungus['ph']:.1f}")
 
-    st.markdown("<br>", unsafe_allow_html=True)
     workflow_col, context_col = st.columns([1.35, 1])
     with workflow_col:
-        st.markdown("### One traceable path from model to bench")
-        st.markdown(
-            """
-            <div class="soft-card">
-              <div class="step"><div class="step-number">01</div><div><strong>Define the operating envelope</strong><span>Select an organism, objective, substrates, oxygen ceiling and cost boundary.</span></div></div>
-              <div class="step"><div class="step-number">02</div><div><strong>Inspect feasible flux</strong><span>Compare a point FBA solution with FVA ranges before trusting a single optimum.</span></div></div>
-              <div class="step"><div class="step-number">03</div><div><strong>Prioritise uncertainty</strong><span>Rank influential variables and generate a compact, information-rich DoE.</span></div></div>
-              <div class="step"><div class="step-number">04</div><div><strong>Form a morphology hypothesis</strong><span>Explore gene–media interactions as testable hypotheses, never as measured phenotypes.</span></div></div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        st.subheader("A traceable path from model to bench")
+        with st.container(border=True):
+            st.markdown(
+                """
+                1. **Define the operating envelope.** Select the organism, substrates,
+                   oxygen ceiling and cost boundary.
+                2. **Inspect feasible flux.** Read the FBA optimum alongside 95%-optimal
+                   FVA ranges.
+                3. **Prioritise uncertainty.** Rank influential constraints and generate
+                   the 15-run follow-up design.
+                4. **Frame a morphology experiment.** Use gene–media rules as explicit,
+                   testable hypotheses.
+                """
+            )
     with context_col:
-        st.markdown("### Current scenario")
+        st.subheader("Current curated scenario")
         current = catalog[st.session_state.fungus_id]
-        st.markdown(
-            f"""
-            <div class="model-card">
-              <span class="tag">{process_mode}</span>
-              <div class="big"><i>{current["name"]}</i></div>
-              <p>{st.session_state.objective}</p>
-              <p>Reference operating point: {current["temperature"]:.0f} °C · pH {current["ph"]:.1f}</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<div class="warning-strip"><strong>Scope:</strong> myco-optima is a reduced-order decision-support tool. Outputs are model-derived hypotheses and require strain-specific calibration, safety review and wet-lab validation.</div>',
-            unsafe_allow_html=True,
+        with st.container(border=True):
+            st.markdown(f"### _{current['name']}_")
+            st.write(st.session_state.objective)
+            st.caption(process_mode)
+            st.caption(
+                f"Reference operating point · {current['temperature']:.0f} °C · "
+                f"pH {current['ph']:.1f}"
+            )
+        st.warning(
+            "Reduced-order outputs are model-derived hypotheses. Calibrate the model, "
+            "complete a safety review and validate experimentally before cultivation."
         )
 
-elif page == "Media Optimizer":
+elif page == "Custom Model":
+    _page_intro(
+        "Bring your own reconstruction",
+        "Custom SBML model",
+        "Upload a COBRA-compatible SBML file, review its structure and choose an "
+        "objective before running bounded FBA and FVA. The model is parsed by this app "
+        "and is never sent to the optional interpretation service automatically.",
+    )
+
+    if not MODEL_UPLOAD_AVAILABLE:
+        st.error(
+            "The custom-model module is unavailable in this installation. Install the "
+            "project dependencies and restart Streamlit."
+        )
+    else:
+        upload_col, scope_col = st.columns([1.45, 1])
+        with upload_col:
+            uploaded_model = st.file_uploader(
+                "Upload SBML",
+                type=["xml", "sbml"],
+                accept_multiple_files=False,
+                key=f"custom_sbml_{st.session_state.get('custom_upload_key', 0)}",
+                help=(
+                    f"Uncompressed UTF-8 SBML only. Maximum size: "
+                    f"{_CUSTOM_MODEL_MAX_BYTES / 1_000_000:.0f} MB."
+                ),
+            )
+        with scope_col, st.container(border=True):
+            st.markdown("**What this workspace supports**")
+            st.markdown(
+                "- Objective selection from uploaded reactions\n"
+                "- Single-solution FBA\n"
+                f"- FVA for up to {_CUSTOM_MODEL_MAX_FVA} selected reactions\n"
+                "- Traceable CSV and JSON exports"
+            )
+            st.caption(
+                "Curated media optimisation, sensitivity-led DoE and morphology "
+                "rules remain available only for the four bundled fungal models."
+            )
+
+        inspection = None
+        if uploaded_model is None:
+            if st.session_state.get("custom_active_upload_identity") is not None:
+                _clear_custom_model_state()
+        else:
+            payload = uploaded_model.getvalue()
+            upload_identity = {
+                "filename": uploaded_model.name,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+            if st.session_state.get("custom_active_upload_identity") != upload_identity:
+                _clear_custom_model_state()
+                st.session_state.custom_active_upload_identity = upload_identity
+            try:
+                if st.session_state.get("custom_inspection_identity") == upload_identity:
+                    inspection = st.session_state.get("custom_inspection")
+                else:
+                    with st.spinner("Validating SBML structure…"):
+                        inspection = _load_custom_model(uploaded_model.name, payload)
+                    st.session_state.custom_inspection = inspection
+                    st.session_state.custom_inspection_identity = upload_identity
+            except _ModelUploadError as exc:
+                st.error(str(exc))
+            except Exception as exc:
+                st.error(
+                    f"The upload could not be opened safely ({type(exc).__name__}). "
+                    "Check that it is an uncompressed COBRA-compatible SBML file."
+                )
+
+        if inspection is None:
+            st.info(
+                "No custom model is active. Upload an `.xml` or `.sbml` file to begin, "
+                "or use the curated fungal workflows from the sidebar."
+            )
+        else:
+            model_label = inspection.model_name or inspection.model_id or inspection.filename
+            _model_notice(
+                "Validated custom SBML",
+                "Identifiers and explicit FBC constraints passed upload preflight.",
+            )
+            st.text(f"File: {inspection.filename}")
+            st.text(f"SHA-256: {inspection.sha256}")
+            st.subheader("Uploaded model")
+            st.text(_display_text(model_label))
+            summary_cols = st.columns(4)
+            summary_cols[0].metric("Reactions", f"{inspection.reactions:,}")
+            summary_cols[1].metric("Metabolites", f"{inspection.metabolites:,}")
+            summary_cols[2].metric("Genes", f"{inspection.genes:,}")
+            summary_cols[3].metric("Exchanges", f"{inspection.exchanges:,}")
+            if len(inspection.current_objective) > 1:
+                st.warning(
+                    "The uploaded model defines a composite objective. This workspace "
+                    "runs one explicitly selected reaction objective, so review the "
+                    "choice below before solving."
+                )
+            with st.expander("Model validation notes"):
+                for warning in inspection.warnings:
+                    st.write(f"- {warning}")
+
+            label_by_id = {
+                candidate.reaction_id: _display_text(candidate.label)
+                for candidate in inspection.objective_candidates
+            }
+            objective_ids = list(inspection.candidate_objective_reaction_ids)
+            current_objective = inspection.current_objective_id
+            default_objective_index = (
+                objective_ids.index(current_objective) if current_objective in objective_ids else 0
+            )
+
+            setup_col, fva_col = st.columns(2)
+            widget_suffix = inspection.sha256[:16]
+            with setup_col:
+                objective_valid = True
+                if len(objective_ids) <= 500:
+                    selected_objective = st.selectbox(
+                        "Objective reaction",
+                        objective_ids,
+                        index=default_objective_index,
+                        format_func=lambda reaction_id: label_by_id[reaction_id],
+                        help=(
+                            "The uploaded objective is selected by default when it "
+                            "contains one term."
+                        ),
+                        key=f"custom_objective_{widget_suffix}",
+                    )
+                else:
+                    selected_objective = st.text_input(
+                        "Objective reaction ID",
+                        value=current_objective or objective_ids[0],
+                        key=f"custom_objective_{widget_suffix}",
+                        help=(
+                            "Large models use an exact reaction ID field to avoid sending "
+                            "thousands of select options to the browser."
+                        ),
+                    ).strip()
+                    objective_valid = selected_objective in label_by_id
+                    with st.expander("Suggested objective reactions"):
+                        st.dataframe(
+                            pd.DataFrame(
+                                [
+                                    {
+                                        "Reaction": candidate.reaction_id,
+                                        "Label": candidate.label,
+                                        "Current": candidate.is_current,
+                                        "Boundary": candidate.boundary,
+                                    }
+                                    for candidate in inspection.objective_candidates[:30]
+                                ]
+                            ),
+                            hide_index=True,
+                            width="stretch",
+                        )
+                    if not objective_valid:
+                        st.error("Enter a reaction ID that exists in the uploaded model.")
+                direction_options = ["max", "min"]
+                direction = st.radio(
+                    "Objective direction",
+                    direction_options,
+                    index=(
+                        direction_options.index(inspection.objective_direction)
+                        if inspection.objective_direction in direction_options
+                        else 0
+                    ),
+                    horizontal=True,
+                    key=f"custom_direction_{widget_suffix}",
+                )
+                if objective_valid:
+                    selected_candidate = next(
+                        candidate
+                        for candidate in inspection.objective_candidates
+                        if candidate.reaction_id == selected_objective
+                    )
+                    if selected_candidate.boundary:
+                        st.warning(
+                            "The selected objective is a boundary reaction. Confirm that "
+                            "maximising or minimising this exchange/demand flux matches the "
+                            "biological question."
+                        )
+            with fva_col:
+                include_fva = st.checkbox(
+                    "Run flux variability analysis",
+                    value=True,
+                    key=f"custom_include_fva_{widget_suffix}",
+                )
+                effective_objective = (
+                    selected_objective
+                    if objective_valid
+                    else (current_objective or objective_ids[0])
+                )
+                default_fva_ids = list(
+                    dict.fromkeys([effective_objective, *inspection.exchange_reaction_ids[:7]])
+                )
+                fva_selection_valid = True
+                if len(objective_ids) <= 500:
+                    selected_fva_ids = st.multiselect(
+                        "FVA reactions",
+                        objective_ids,
+                        default=default_fva_ids,
+                        format_func=lambda reaction_id: label_by_id[reaction_id],
+                        max_selections=_CUSTOM_MODEL_MAX_FVA,
+                        disabled=not include_fva,
+                        help=(
+                            "Select a bounded subset; whole-model FVA can be "
+                            "unexpectedly expensive."
+                        ),
+                        key=f"custom_fva_reactions_{widget_suffix}",
+                    )
+                    fva_selection_valid = not include_fva or bool(selected_fva_ids)
+                    if include_fva and not fva_selection_valid:
+                        st.error("Choose at least one reaction for FVA, or turn FVA off.")
+                else:
+                    raw_fva_ids = st.text_area(
+                        "FVA reaction IDs (one per line)",
+                        value="\n".join(default_fva_ids),
+                        height=150,
+                        disabled=not include_fva,
+                        key=f"custom_fva_reactions_{widget_suffix}",
+                    )
+                    selected_fva_ids = list(
+                        dict.fromkeys(
+                            item.strip()
+                            for item in raw_fva_ids.replace(",", "\n").splitlines()
+                            if item.strip()
+                        )
+                    )
+                    unknown_fva = [
+                        reaction_id
+                        for reaction_id in selected_fva_ids
+                        if reaction_id not in label_by_id
+                    ]
+                    fva_selection_valid = not include_fva or (
+                        bool(selected_fva_ids)
+                        and len(selected_fva_ids) <= _CUSTOM_MODEL_MAX_FVA
+                        and not unknown_fva
+                    )
+                    if include_fva and not fva_selection_valid:
+                        st.error(f"Choose 1–{_CUSTOM_MODEL_MAX_FVA} valid reaction IDs for FVA.")
+                fva_fraction = st.slider(
+                    "Fraction of optimum retained",
+                    min_value=0.50,
+                    max_value=1.00,
+                    value=0.95,
+                    step=0.01,
+                    disabled=not include_fva,
+                    key=f"custom_fva_fraction_{widget_suffix}",
+                )
+                if include_fva and direction == "min" and fva_fraction < 1:
+                    fva_selection_valid = False
+                    st.error(
+                        "Minimisation objectives require an FVA fraction of 1.00 in this workspace."
+                    )
+
+            analysis_signature = {
+                "sha256": inspection.sha256,
+                "objective": selected_objective,
+                "direction": direction,
+                "fva_reactions": selected_fva_ids if include_fva else [],
+                "fva_fraction": fva_fraction if include_fva else None,
+            }
+            analysis_was_invalidated = bool(
+                st.session_state.get("custom_analysis_signature")
+                and st.session_state.get("custom_analysis_signature") != analysis_signature
+            )
+            if analysis_was_invalidated:
+                _clear_custom_analysis_state()
+                st.info("The analysis setup changed. Run again to create a fresh result.")
+            if st.button(
+                "Run custom-model analysis",
+                type="primary",
+                width="stretch",
+                disabled=not objective_valid or (include_fva and not fva_selection_valid),
+            ):
+                _clear_custom_analysis_state()
+                try:
+                    with st.spinner("Solving the uploaded model…"):
+                        custom_result = _core_analyse_custom_model(
+                            inspection,
+                            selected_objective,
+                            direction=direction,
+                            fva_reaction_ids=selected_fva_ids if include_fva else None,
+                            fraction_of_optimum=fva_fraction,
+                        )
+                    st.session_state.custom_analysis = _plain(custom_result)
+                    st.session_state.custom_analysis_signature = analysis_signature
+                    st.session_state.custom_analysis_metadata = inspection.metadata()
+                    st.session_state.custom_analysis_generated_at = datetime.now(UTC).isoformat()
+                except (_CustomModelAnalysisError, ValueError) as exc:
+                    st.error(str(exc))
+                except Exception as exc:
+                    st.error(
+                        f"The custom analysis did not complete ({type(exc).__name__}). "
+                        "Review the objective and model constraints."
+                    )
+
+            analysis = None
+            if st.session_state.get("custom_analysis_signature") == analysis_signature:
+                analysis = st.session_state.get("custom_analysis")
+
+            if analysis:
+                st.subheader("Analysis result")
+                result_cols = st.columns(4)
+                result_cols[0].metric("Solver status", str(analysis["status"]).title())
+                objective_value = analysis.get("objective_value")
+                result_cols[1].metric(
+                    "Objective value",
+                    f"{objective_value:.5g}" if objective_value is not None else "Unavailable",
+                )
+                nonzero_fluxes = sum(
+                    abs(float(value)) > 1e-9 for value in analysis.get("fluxes", {}).values()
+                )
+                result_cols[2].metric("Non-zero fluxes", f"{nonzero_fluxes:,}")
+                result_cols[3].metric("FVA reactions", f"{len(analysis.get('fva_ranges', {})):,}")
+
+                raw_reaction_names = {
+                    reaction.id: reaction.name or reaction.id
+                    for reaction in inspection.model.reactions
+                }
+                reaction_names = {
+                    reaction_id: _display_text(name)
+                    for reaction_id, name in raw_reaction_names.items()
+                }
+                flux_frame = pd.DataFrame(
+                    [
+                        {
+                            "Reaction": reaction_id,
+                            "Name": reaction_names.get(reaction_id, reaction_id),
+                            "Flux": float(flux),
+                            "Absolute flux": abs(float(flux)),
+                        }
+                        for reaction_id, flux in analysis.get("fluxes", {}).items()
+                    ],
+                    columns=["Reaction", "Name", "Flux", "Absolute flux"],
+                ).sort_values("Absolute flux", ascending=False)
+                fva_frame = pd.DataFrame(list(analysis.get("fva_ranges", {}).values()))
+                exchange_frame = pd.DataFrame(
+                    [
+                        {
+                            "Reaction": reaction_id,
+                            "Name": reaction_names.get(reaction_id, reaction_id),
+                            "Lower bound": inspection.model.reactions.get_by_id(
+                                reaction_id
+                            ).lower_bound,
+                            "Upper bound": inspection.model.reactions.get_by_id(
+                                reaction_id
+                            ).upper_bound,
+                        }
+                        for reaction_id in inspection.exchange_reaction_ids
+                    ]
+                )
+
+                flux_tab, variability_tab, provenance_tab = st.tabs(
+                    ["FBA fluxes", "FVA ranges", "Model provenance"]
+                )
+                with flux_tab:
+                    st.caption("Sorted by absolute flux; zero-flux reactions are retained.")
+                    st.dataframe(
+                        flux_frame.drop(columns="Absolute flux"),
+                        hide_index=True,
+                        width="stretch",
+                        height=430,
+                    )
+                with variability_tab:
+                    if fva_frame.empty:
+                        st.info("FVA was not requested for this run.")
+                    else:
+                        fva_frame = fva_frame.rename(
+                            columns={
+                                "reaction_id": "Reaction",
+                                "reaction_name": "Name",
+                                "minimum": "Minimum",
+                                "maximum": "Maximum",
+                            }
+                        )
+                        fva_frame["Span"] = fva_frame["Maximum"] - fva_frame["Minimum"]
+                        fig = go.Figure(
+                            go.Bar(
+                                y=fva_frame["Reaction"],
+                                x=fva_frame["Span"],
+                                base=fva_frame["Minimum"],
+                                orientation="h",
+                                marker_color="#8ecfb1",
+                                customdata=fva_frame["Maximum"],
+                                hovertemplate=(
+                                    "%{y}<br>range: %{base:.4g}–%{customdata:.4g}<extra></extra>"
+                                ),
+                            )
+                        )
+                        fig.update_layout(xaxis_title="Flux", yaxis_title=None)
+                        st.plotly_chart(
+                            _plot_layout(fig, max(320, 36 * len(fva_frame))),
+                            width="stretch",
+                            config={"displayModeBar": False},
+                        )
+                        st.dataframe(
+                            fva_frame.drop(columns="Span"), hide_index=True, width="stretch"
+                        )
+                with provenance_tab:
+                    st.json(inspection.metadata(), expanded=False)
+                    if exchange_frame.empty:
+                        st.info("COBRApy did not detect boundary exchange reactions.")
+                    else:
+                        st.markdown("#### Detected exchanges")
+                        st.dataframe(exchange_frame, hide_index=True, width="stretch")
+
+                export_payload = {
+                    "metadata": inspection.metadata(),
+                    "request": analysis_signature,
+                    "analysis": analysis,
+                    "environment": {
+                        "app_version": APP_VERSION,
+                        "cobra_version": COBRA_VERSION,
+                        "solver_interface": getattr(
+                            inspection.model.solver.interface,
+                            "__name__",
+                            str(inspection.model.solver.interface),
+                        ),
+                        "generated_at": st.session_state.get("custom_analysis_generated_at"),
+                    },
+                    "disclaimer": (
+                        "Custom constraints were analysed as uploaded. No bundled "
+                        "organism, medium, sensitivity or morphology assumptions were applied."
+                    ),
+                }
+                export_flux_frame = flux_frame.drop(columns="Absolute flux").copy()
+                export_flux_frame["Name"] = export_flux_frame["Reaction"].map(raw_reaction_names)
+                export_flux_frame.insert(0, "Model SHA-256", inspection.sha256)
+                export_flux_frame.insert(1, "Objective", selected_objective)
+                export_flux_frame.insert(2, "Direction", direction)
+                _download_pair(
+                    export_flux_frame,
+                    f"myco-optima_custom_{inspection.sha256[:8]}",
+                    export_payload,
+                )
+                for warning in analysis.get("warnings", []):
+                    st.warning(warning)
+
+            with st.expander("Upload validation details"):
+                st.json(inspection.metadata(), expanded=False)
+                if st.button("Forget this upload"):
+                    _clear_custom_model_state()
+                    st.session_state.custom_upload_key = (
+                        st.session_state.get("custom_upload_key", 0) + 1
+                    )
+                    st.rerun()
+
+elif page == "Media Optimiser":
     _page_intro(
         "Constraint-based design",
-        "Media Optimizer",
+        "Media Optimiser",
         "Set the practical limits. The tool scores a feasible medium, exposes alternate optima, and shows which fluxes remain flexible.",
     )
     _model_notice(
@@ -1305,23 +1775,33 @@ elif page == "Media Optimizer":
         )
         submitted = st.form_submit_button("Run media optimisation", type="primary", width="stretch")
     with explainer_col:
-        st.markdown("#### What the model is balancing")
-        st.markdown(
-            """
-            <div class="soft-card">
-              <div class="step"><div class="step-number">C</div><div><strong>Carbon economy</strong><span>Enough substrate for the objective without assuming infinite uptake.</span></div></div>
-              <div class="step"><div class="step-number">N</div><div><strong>Nitrogen sufficiency</strong><span>Avoids a formulation that looks cheap but caps biomass or protein.</span></div></div>
-              <div class="step"><div class="step-number">O₂</div><div><strong>Transfer realism</strong><span>Treats oxygen as an explicit constraint in aerobic operation.</span></div></div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.caption(
-            "Every slider is a relative maximum-availability bound. Converting a real recipe into these values requires measured uptake data or fitted kinetics."
-        )
-        st.caption(
-            f"Optimising for: {st.session_state.objective}. {OBJECTIVES[st.session_state.objective]}"
-        )
+        st.markdown("#### What the optimiser balances")
+        with st.container(border=True):
+            st.markdown(
+                """
+                **Carbon economy**
+
+                Enough substrate for the objective without assuming infinite uptake.
+
+                **Nitrogen sufficiency**
+
+                Avoids a low-cost formulation that simply caps biomass.
+
+                **Oxygen feasibility**
+
+                Keeps aerobic capacity explicit instead of hiding it in a fixed recipe.
+                """
+            )
+        with st.expander("How to interpret model units"):
+            st.write(
+                "Inputs are relative maximum-availability bounds, not flask "
+                "concentrations. Mapping a recipe to these bounds requires measured "
+                "uptake data or fitted kinetics."
+            )
+            st.caption(
+                f"Objective · {st.session_state.objective}. "
+                f"{OBJECTIVES[st.session_state.objective]}"
+            )
 
     settings = _shared_settings()
     if (
@@ -1363,16 +1843,16 @@ elif page == "Media Optimizer":
             help="Uses bundled relative ingredient costs.",
         )
 
-    comp_col, flux_col = st.columns([1, 1.15])
-    with comp_col:
-        st.markdown("#### Optimized availability bounds")
+    summary_tab, flux_tab, alternatives_tab = st.tabs(
+        ["Optimised bounds", "Flux envelope", "Alternatives"]
+    )
+    with summary_tab:
         display_composition = result["composition"].copy()
         display_composition["Recommended"] = display_composition["Recommended"].round(3)
         display_composition["Estimated cost"] = display_composition["Estimated cost"].round(2)
         st.dataframe(display_composition, hide_index=True, width="stretch")
         st.caption(f"Highest local sensitivity: **{result['limiting_nutrient']}**")
-    with flux_col:
-        st.markdown("#### FVA solution envelope")
+    with flux_tab:
         fva = result["fva"].sort_values("FBA flux")
         fig = go.Figure()
         fig.add_trace(
@@ -1399,8 +1879,7 @@ elif page == "Media Optimizer":
         )
         fig.update_layout(xaxis_title="Relative flux", yaxis_title=None)
         st.plotly_chart(_plot_layout(fig, 375), width="stretch", config={"displayModeBar": False})
-
-    with st.expander("Compare the six highest-scoring alternatives", expanded=True):
+    with alternatives_tab:
         alternatives = result["alternatives"].copy()
         st.dataframe(
             alternatives,
@@ -1413,9 +1892,10 @@ elif page == "Media Optimizer":
         f"myco-optima_{settings['fungus_id']}_medium",
         _serialise_media(result, settings),
     )
-    st.markdown(
-        '<div class="warning-strip"><strong>Before cultivation:</strong> these bounds are not recipe concentrations. Calibrate them to uptake data, then confirm units, solubility, osmolarity, oxygen-transfer capacity, strain auxotrophies and local biosafety requirements.</div>',
-        unsafe_allow_html=True,
+    st.warning(
+        "Before cultivation, calibrate these bounds to uptake data and confirm units, "
+        "solubility, osmolarity, oxygen-transfer capacity, strain auxotrophies and local "
+        "biosafety requirements."
     )
 
 elif page == "Sensitivity & DoE":
@@ -1430,10 +1910,13 @@ elif page == "Sensitivity & DoE":
     with control_col:
         st.metric("Follow-up design size", "15 runs", help="12 Box–Behnken edges + 3 centres")
         perturbation = st.slider("Local perturbation window", 5, 30, 15, 5, format="%d%%")
-    with explanation_col:
-        st.markdown(
-            f'<div class="soft-card"><div class="section-kicker">Screening compression</div><h3>81 → {run_count} runs</h3><p>A model-guided shortlist for the current <i>{catalog[settings["fungus_id"]]["short"]}</i> scenario. Add controls, biological replicates and process-specific validation outside this suggested core.</p></div>',
-            unsafe_allow_html=True,
+    with explanation_col, st.container(border=True):
+        st.caption("SCREENING COMPRESSION")
+        st.metric("Candidate grid → follow-up", f"81 → {run_count}")
+        st.write(
+            f"Model-guided shortlist for the current "
+            f"_{catalog[settings['fungus_id']]['short']}_ scenario. Add controls, "
+            "biological replicates and process-specific validation."
         )
 
     sensitivity, doe, sensitivity_note = _run_sensitivity(settings, run_count, perturbation / 100)
@@ -1445,9 +1928,8 @@ elif page == "Sensitivity & DoE":
         sensitivity_note,
     )
 
-    tornado_col, map_col = st.columns([1.05, 1])
-    with tornado_col:
-        st.markdown("#### Ranked local sensitivities")
+    sensitivity_tab, design_space_tab = st.tabs(["Sensitivity ranking", "Design space"])
+    with sensitivity_tab:
         chart_data = sensitivity.sort_values("Elasticity")
         colours = ["#d98263" if value < 0 else "#2a9d73" for value in chart_data["Elasticity"]]
         fig = go.Figure(
@@ -1465,8 +1947,7 @@ elif page == "Sensitivity & DoE":
             xaxis_title=f"Response elasticity (±{perturbation}% local change)", yaxis_title=None
         )
         st.plotly_chart(_plot_layout(fig, 405), width="stretch", config={"displayModeBar": False})
-    with map_col:
-        st.markdown("#### Candidate design space")
+    with design_space_tab:
         fig = px.scatter(
             doe,
             x="Carbon availability",
@@ -1484,11 +1965,8 @@ elif page == "Sensitivity & DoE":
     st.caption(
         "Exact three-factor Box–Behnken follow-up: 12 edge conditions plus three centre replicates."
     )
-    top_n = st.number_input(
-        "Rows to display", min_value=5, max_value=run_count, value=min(15, run_count), step=1
-    )
     st.dataframe(
-        doe.head(int(top_n)),
+        doe,
         hide_index=True,
         width="stretch",
     )
@@ -1584,21 +2062,16 @@ elif page == "Gene–Media Explorer":
 
     result_col, score_col = st.columns([0.72, 1.3])
     with result_col:
-        st.markdown(
-            f"""
-            <div class="model-card">
-              <div class="section-kicker" style="color:#9ae9c5">Most likely model class</div>
-              <div class="big">{prediction["morphology"]}</div>
-              <p>Evidence confidence: {prediction["confidence"].title()}</p>
-              <p>Top-class separation: {prediction["separation"]:.2f}</p>
-              <p>Qualitative morphology class under this gene–media scenario.</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<div class="warning-strip"><strong>Important:</strong> support scores are rule-weighted comparisons, not probabilities. Pellet size, rheology and productivity also depend on inoculum, shear, geometry and culture history.</div>',
-            unsafe_allow_html=True,
+        with st.container(border=True):
+            st.caption("MODEL-SUPPORTED MORPHOLOGY")
+            st.markdown(f"### {prediction['morphology']}")
+            st.metric("Evidence confidence", prediction["confidence"].title())
+            st.metric("Top-class separation", f"{prediction['separation']:.2f}")
+            st.caption("Qualitative class for this gene–media scenario.")
+        st.warning(
+            "Support scores are rule-weighted comparisons, not probabilities. Pellet "
+            "size, rheology and productivity also depend on inoculum, shear, geometry "
+            "and culture history."
         )
     with score_col:
         score_table = prediction["score_table"].sort_values("Relative support")
@@ -1655,11 +2128,13 @@ elif page == "Gene–Media Explorer":
         },
     )
 
-elif page == "AI Interpretation & About":
+elif page == "Interpretation & Methods":
     _page_intro(
-        "Human-readable synthesis",
-        "AI Interpretation",
-        "Turn the current model outputs into a concise engineering brief. No data leaves this app unless you explicitly run an Anthropic request.",
+        "Optional synthesis",
+        "Interpretation & methods",
+        "Review the modelling boundary and, if useful, ask Anthropic to turn an "
+        "already-computed result into a concise engineering brief. Numerical results "
+        "never depend on the language model.",
     )
 
     context_choice = st.selectbox(
@@ -1732,24 +2207,26 @@ elif page == "AI Interpretation & About":
         ).encode("utf-8")
     ).hexdigest()
 
-    try:
-        secret_key = st.secrets.get("ANTHROPIC_API_KEY", "")
-    except Exception:
-        secret_key = ""
-    configured_api_key = os.getenv("ANTHROPIC_API_KEY", "") or secret_key
-    session_api_key = st.text_input(
-        "Session-only API key override",
-        value="",
-        type="password",
-        help=(
-            "Leave blank to use a server-side ANTHROPIC_API_KEY or Streamlit secret. "
-            "A configured server key is never inserted into this browser field."
-        ),
-    )
+    with st.expander("Anthropic connection (optional)"):
+        try:
+            secret_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+        except Exception:
+            secret_key = ""
+        configured_api_key = os.getenv("ANTHROPIC_API_KEY", "") or secret_key
+        session_api_key = st.text_input(
+            "Session-only API key override",
+            value="",
+            type="password",
+            help=(
+                "Leave blank to use a server-side ANTHROPIC_API_KEY or Streamlit secret. "
+                "A configured server key is never inserted into this browser field."
+            ),
+        )
+        model_name = st.text_input(
+            "Anthropic model", value=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
+        )
+        st.caption("Only the selected structured result and focus prompt are sent on request.")
     api_key = session_api_key.strip() or configured_api_key
-    model_name = st.text_input(
-        "Anthropic model", value=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
-    )
 
     if not api_key:
         st.info(
@@ -1854,7 +2331,7 @@ elif page == "AI Interpretation & About":
         )
 
 
-st.markdown("<br><hr>", unsafe_allow_html=True)
+st.divider()
 st.caption(
     "myco-optima · Decision support for fungal fermentation · Model outputs are hypotheses, not cultivation instructions."
 )

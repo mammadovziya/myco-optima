@@ -18,9 +18,11 @@ media optimisation.
 This repository is the usable, documented version of that one-day idea. You can
 choose an industrial fungus, change the available carbon, nitrogen, oxygen and
 minerals, run FBA/FVA, see which inputs matter most, and turn that sensitivity
-ranking into a 15-run follow-up experiment. There is also a small gene–media
-module for exploring morphology hypotheses, because “more biomass” is not much
-help if the resulting broth is impossible to mix.
+ranking into a 15-run follow-up experiment. If you already have a COBRA model,
+you can upload its SBML file and inspect its objective, exchanges, FBA solution
+and a bounded set of FVA ranges. There is also a small gene–media module for
+exploring morphology hypotheses, because “more biomass” is not much help if the
+resulting broth is impossible to mix.
 
 The honest version: the four models bundled here are transparent reduced-order
 surrogates, not validated genome-scale reconstructions. They make the workflow
@@ -30,14 +32,21 @@ curated model, fitted uptake bounds and wet-lab validation.
 
 ## What is in the app
 
-- **Media Optimizer** runs a cost-aware media search and reports predicted
+The interface is intentionally built from Streamlit's own forms, metrics, tabs,
+tables and status messages. It feels like a modelling workbench rather than a
+generated landing page, and it stays usable on a narrow screen.
+
+- **Media Optimiser** runs a cost-aware media search and reports predicted
   growth, yield, limiting nutrients, FBA fluxes and 95%-optimal FVA ranges.
+- **Custom Model** validates an uploaded SBML reconstruction, keeps its reaction
+  identifiers and constraints intact, and runs FBA/FVA against a chosen objective.
 - **Sensitivity & DoE** perturbs the current medium, ranks the levers by local
   elasticity, and creates a downloadable follow-up design.
 - **Gene–Media Explorer** combines explicit, cited regulatory rules with media
   context to return a qualitative morphology tendency and the full rule trace.
-- **AI Interpretation** can ask Claude to explain an already-computed result in
-  plain language. It is optional and cannot alter any numerical result.
+- **Interpretation & Methods** documents the modelling boundary and can,
+  optionally, ask Claude to explain an already-computed result in plain language.
+  It cannot alter any numerical result.
 - **Exports** are available as CSV and JSON so the interesting part can leave
   the dashboard and become an actual lab conversation.
 
@@ -78,7 +87,7 @@ Do not put a real key in the repository or in `.streamlit/config.toml`.
 If you just want to see whether the project works, leave the default organism
 and objective selected, then:
 
-1. Open **Media Optimizer**, keep the starting medium, and run the analysis.
+1. Open **Media Optimiser**, keep the starting medium, and run the analysis.
 2. Look at the FVA chart. A wide range means the model can route flux in several
    equally good ways; it is not an error bar.
 3. Open **Sensitivity & DoE** and generate the 15-run plan.
@@ -86,6 +95,26 @@ and objective selected, then:
    `racA` knock-down. Expand the trace to see exactly which rule fired.
 5. Download the design as CSV. That file—not the dashboard—is the natural handoff
    for protocol planning.
+
+## Bringing your own model
+
+The **Custom Model** workspace accepts uncompressed UTF-8 `.xml` and `.sbml`
+files up to 5 MB. It shows the model inventory first, keeps the uploaded objective
+selected by default, and asks you to choose the small set of reactions that
+actually need FVA. The full flux table and a provenance record can then be
+downloaded without involving Claude.
+
+I made this boundary deliberately strict. Uploads with DTD/entity declarations,
+implicit or dangling flux bounds, a missing objective, non-finite parameters, or
+more than 20,000 reactions are rejected before optimisation. Custom FVA is capped
+at 50 reactions per run and the solver receives a 30-second timeout where the
+installed solver supports one.
+
+An uploaded model does **not** inherit the bundled fungal assumptions. The app
+will not run the curated cost optimiser, media sensitivity ranking or morphology
+rules against an arbitrary reconstruction because the exchange mapping and
+biological evidence would be unknown. Those features remain attached to the four
+transparent teaching models.
 
 ## Where the “about 80 runs to 15” comes from
 
@@ -107,8 +136,12 @@ chosen for the real organism and process.
 ```mermaid
 flowchart LR
     A["Organism + medium bounds"] --> B["Reduced-order COBRA model"]
+    K["Uploaded SBML"] --> L["Bound + objective preflight"]
+    L --> M["Custom-model copy"]
     B --> C["FBA optimum"]
     B --> D["95%-optimal FVA ranges"]
+    M --> N["Custom FBA"]
+    M --> O["Selected-reaction FVA"]
     B --> E["One-factor sensitivity"]
     E --> F["Top three controllable factors"]
     F --> G["15-run Box–Behnken design"]
@@ -135,6 +168,8 @@ app.py                         Streamlit interface and download flows
 src/myco_optima/catalog.py     organism and nutrient configuration
 src/myco_optima/models.py      reduced-order COBRA model builder
 src/myco_optima/optimization.py FBA, FVA, sensitivity and media search
+src/myco_optima/model_io.py    validated custom SBML loading and analysis
+src/myco_optima/exports.py     safe CSV and strict JSON serialization
 src/myco_optima/doe.py         sensitivity-guided Box–Behnken design
 src/myco_optima/gene_media.py  explicit morphology rule engine
 src/myco_optima/ai.py          optional Anthropic interpretation boundary
@@ -153,7 +188,9 @@ The tests check more than imports. They cover nutrient essentiality, determinist
 FBA and sensitivity rankings, valid FVA bounds, medium immutability, the exact
 12-edge/3-centre experimental design, known morphology rules, unknown-gene
 behaviour, and the optional Anthropic client boundary. GitHub Actions runs the
-suite on Python 3.11 and 3.12.
+suite on Python 3.11 and 3.12. Upload tests also cover malformed XML, unsafe
+entities, missing bounds, oversized networks, objective selection, solver failure
+and copy-safe custom FBA/FVA.
 
 For a container instead:
 
@@ -164,12 +201,12 @@ docker run --rm -p 8501:8501 myco-optima
 
 ## Things I would do next
 
-The most important next step is not another chart. It is a model-import path for
-proper SBML reconstructions, followed by strain-specific exchange calibration.
-After that I would add saved projects, plate-layout exports, uncertainty from
-measured uptake ranges, and a comparison view between predicted and observed
-responses. Those features only become meaningful once real experimental data is
-available.
+The most important next step is not another chart. It is a proper exchange-mapping
+and calibration workflow for imported reconstructions, using strain-specific
+uptake measurements rather than guessed aliases. After that I would add saved
+projects, plate-layout exports, uncertainty from measured uptake ranges, and a
+comparison view between predicted and observed responses. Those features only
+become meaningful once real experimental data is available.
 
 ## Context and credit
 
