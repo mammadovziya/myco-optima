@@ -8,6 +8,14 @@ Myco Optima is a small fungal fermentation modelling tool built for the Pacifico
 
 I wanted to make metabolic modelling easier to use for fermentation engineers who do not work with COBRA models every day. The app uses Python, COBRApy and Streamlit to turn media choices into readable FBA, FVA, sensitivity and experiment planning results.
 
+## See it in action
+
+[![Watch the Myco Optima walkthrough](assets/myco-optima-demo-poster.jpg)](assets/myco-optima-demo.mp4)
+
+[Watch the 47-second walkthrough](assets/myco-optima-demo.mp4). It covers media optimisation, FVA, sensitivity-guided experiment design, the gene-media explorer, SBML intake and FASTA validation.
+
+The FASTA shown in the video is the reviewed [UniProt P69328 glucoamylase](https://www.uniprot.org/uniprotkb/P69328/entry) from *Aspergillus niger*. A copy is included in [`examples/aspergillus_niger_P69328_glucoamylase.faa`](examples/aspergillus_niger_P69328_glucoamylase.faa) so the upload can be repeated locally.
+
 ## What it does
 
 The app includes demonstration models for four industrial fungi:
