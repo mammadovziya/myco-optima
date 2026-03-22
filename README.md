@@ -20,7 +20,11 @@ choose an industrial fungus, change the available carbon, nitrogen, oxygen and
 minerals, run FBA/FVA, see which inputs matter most, and turn that sensitivity
 ranking into a 15-run follow-up experiment. If you already have a COBRA model,
 you can upload its SBML file and inspect its objective, exchanges, FBA solution
-and a bounded set of FVA ranges. There is also a small gene–media module for
+and a bounded set of FVA ranges. If you are earlier in the modelling process,
+you can instead bring nucleotide sequences (`.fna`), protein sequences (`.faa`),
+or both. The app inventories those sequences and prepares a
+traceable reconstruction handoff; it does not pretend that a FASTA file is
+already a metabolic model. There is also a small gene–media module for
 exploring morphology hypotheses, because “more biomass” is not much help if the
 resulting broth is impossible to mix.
 
@@ -38,8 +42,10 @@ generated landing page, and it stays usable on a narrow screen.
 
 - **Media Optimiser** runs a cost-aware media search and reports predicted
   growth, yield, limiting nutrients, FBA fluxes and 95%-optimal FVA ranges.
-- **Custom Model** validates an uploaded SBML reconstruction, keeps its reaction
-  identifiers and constraints intact, and runs FBA/FVA against a chosen objective.
+- **Custom Model** has two deliberately separate routes. One validates an SBML
+  reconstruction and runs FBA/FVA against a chosen objective. The other accepts
+  `.fna` and `.faa` FASTA files, checks and inventories their records, and exports
+  a handoff manifest for an external genome-scale reconstruction workflow.
 - **Sensitivity & DoE** perturbs the current medium, ranks the levers by local
   elasticity, and creates a downloadable follow-up design.
 - **Gene–Media Explorer** combines explicit, cited regulatory rules with media
@@ -96,13 +102,31 @@ and objective selected, then:
 5. Download the design as CSV. That file—not the dashboard—is the natural handoff
    for protocol planning.
 
-## Bringing your own model
+## Bringing your own biological input
 
-The **Custom Model** workspace accepts uncompressed UTF-8 `.xml` and `.sbml`
-files up to 5 MB. It shows the model inventory first, keeps the uploaded objective
-selected by default, and asks you to choose the small set of reactions that
-actually need FVA. The full flux table and a provenance record can then be
-downloaded without involving Claude.
+The **Custom Model** workspace begins by asking what you actually have.
+
+If it is a metabolic reconstruction, upload an uncompressed UTF-8 `.xml` or
+`.sbml` file up to 5 MB. The app shows the model inventory first, keeps the
+uploaded objective selected by default, and asks you to choose the small set of
+reactions that actually need FVA. The full flux table and a provenance record
+can then be downloaded without involving Claude.
+
+If you have sequences instead, upload one nucleotide FASTA (`.fna`), one protein
+FASTA (`.faa`), or the two as a user-declared co-upload. Each file may be up to
+100 MB and accepted processing is capped at 150 MB for the pair. A public
+deployment should still set concurrency and memory limits appropriate to its
+host, because uploaded files live in each active Streamlit session.
+The app validates the FASTA structure, reports record and residue counts, shows a
+bounded record preview, and lets you download an inventory and handoff manifest.
+Those exports include file hashes so the inputs can be traced into a later model.
+
+A FASTA upload does **not** run FBA or FVA. Sequence files contain bases or amino
+acids, not a stoichiometric reaction network, flux bounds or an objective. Use a
+dedicated annotation and metabolic-reconstruction workflow, curate the resulting
+GEM, export it as SBML, and then return to the SBML route in Myco Optima. The
+sequence handoff is there to make that boundary useful and traceable, not to
+claim that reconstruction happened inside this app.
 
 I made this boundary deliberately strict. Uploads with DTD/entity declarations,
 implicit or dangling flux bounds, a missing objective, non-finite parameters, or
@@ -137,6 +161,9 @@ chosen for the real organism and process.
 flowchart LR
     A["Organism + medium bounds"] --> B["Reduced-order COBRA model"]
     K["Uploaded SBML"] --> L["Bound + objective preflight"]
+    P["Uploaded FNA and/or FAA"] --> Q["Sequence validation + inventory"]
+    Q --> R["External GEM reconstruction + curation"]
+    R --> K
     L --> M["Custom-model copy"]
     B --> C["FBA optimum"]
     B --> D["95%-optimal FVA ranges"]
@@ -169,6 +196,7 @@ src/myco_optima/catalog.py     organism and nutrient configuration
 src/myco_optima/models.py      reduced-order COBRA model builder
 src/myco_optima/optimization.py FBA, FVA, sensitivity and media search
 src/myco_optima/model_io.py    validated custom SBML loading and analysis
+src/myco_optima/sequence_io.py bounded FASTA validation and handoff metadata
 src/myco_optima/exports.py     safe CSV and strict JSON serialization
 src/myco_optima/doe.py         sensitivity-guided Box–Behnken design
 src/myco_optima/gene_media.py  explicit morphology rule engine
@@ -190,7 +218,9 @@ FBA and sensitivity rankings, valid FVA bounds, medium immutability, the exact
 behaviour, and the optional Anthropic client boundary. GitHub Actions runs the
 suite on Python 3.11 and 3.12. Upload tests also cover malformed XML, unsafe
 entities, missing bounds, oversized networks, objective selection, solver failure
-and copy-safe custom FBA/FVA.
+and copy-safe custom FBA/FVA. Sequence-intake tests cover nucleotide and protein
+files, paired handoffs, malformed replacements, clearing and session isolation;
+they also assert that a FASTA upload never exposes solver controls or flux results.
 
 For a container instead:
 
@@ -201,12 +231,13 @@ docker run --rm -p 8501:8501 myco-optima
 
 ## Things I would do next
 
-The most important next step is not another chart. It is a proper exchange-mapping
-and calibration workflow for imported reconstructions, using strain-specific
-uptake measurements rather than guessed aliases. After that I would add saved
-projects, plate-layout exports, uncertainty from measured uptake ranges, and a
-comparison view between predicted and observed responses. Those features only
-become meaningful once real experimental data is available.
+The most important next step is not another chart. It is a reproducible,
+fungal-aware reconstruction workflow between the FASTA handoff and imported
+SBML, followed by proper exchange mapping and calibration with strain-specific
+uptake measurements. After that I would add saved projects, plate-layout
+exports, uncertainty from measured uptake ranges, and a comparison view between
+predicted and observed responses. Those features only become meaningful once
+real experimental data is available.
 
 ## Context and credit
 

@@ -76,6 +76,48 @@ uses one process. The solver is given a 30-second timeout when its interface
 supports one. These are resource guardrails, not proof that every accepted model
 is biologically correct or numerically well conditioned.
 
+## Uploaded nucleotide and protein FASTA
+
+The sequence-intake route accepts one nucleotide FASTA (`.fna`), one protein
+FASTA (`.faa`), or a user-declared co-upload, with a 100 MB limit per file and a
+150 MB combined accepted-processing limit. A deployment still needs enough
+memory and an appropriate concurrency policy because two files exist in the
+Streamlit session before their combined size can be checked. Validation is
+format-specific: nucleotide records are checked as nucleotide sequences and
+protein records as amino-acid sequences. The app reports only properties that
+are present in the files themselves, such as record count, total residues,
+length range, GC content for nucleotide input, and bounded record previews.
+
+These uploads are held in the current Streamlit session and are not sent to
+Anthropic. Replacing or clearing either member of a pair invalidates the previous
+inventory. Downloadable CSV and JSON handoffs include filenames, content hashes
+and inventory metadata so a downstream reconstruction can be traced back to the
+exact sequence inputs.
+
+Nucleotide GC percentage uses only `A+C+G+T+U` as its denominator; ambiguity
+codes are excluded, so an all-ambiguous record has no GC percentage. A single
+terminal `*` is accepted in a protein record as a stop marker and excluded from
+the amino-acid length. Internal or repeated stop markers are rejected. Sequence
+lines may be wrapped or unwrapped within the documented file and record limits.
+The parser also caps physical lines, blank lines, record identifiers and total
+retained identifier bytes so a small, pathological FASTA cannot consume an
+unbounded amount of CPU or session memory.
+
+For the optional CDS/FAA comparison, a record identifier is the first
+whitespace-delimited token after `>` and comparison is case-sensitive. Duplicate
+identifiers are rejected during intake. Literal overlap is reported only when the
+FNA is declared as coding sequences; it is a reproducibility check, not evidence
+that a nucleotide record encodes the similarly named protein.
+
+Sequence intake is **not** genome-scale metabolic-model reconstruction. An FNA
+or FAA file has no reaction stoichiometry, exchange bounds, gene–protein–reaction
+rules or optimisation objective, so Myco Optima does not expose FBA/FVA controls
+for it and does not infer fluxes. The next step is an external annotation and
+fungal GEM-reconstruction workflow, followed by biological curation and gap
+review. Only its resulting, explicitly bounded SBML model belongs in the custom
+solver route. Pairing FNA and FAA improves the handoff context but does not close
+that modelling gap by itself.
+
 ## How “about 80 runs to 15” is calculated
 
 Four factors at three levels produce 3⁴ = 81 candidate conditions. Myco Optima

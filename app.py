@@ -33,11 +33,12 @@ CORE_AVAILABLE = False
 CORE_IMPORT_NOTE = "Scientific package not installed"
 AI_HELPER_AVAILABLE = False
 MODEL_UPLOAD_AVAILABLE = False
+SEQUENCE_UPLOAD_AVAILABLE = False
 
 try:
     from myco_optima import __version__ as APP_VERSION
 except Exception:
-    APP_VERSION = "0.2.0"
+    APP_VERSION = "0.3.0"
 
 try:
     from cobra import __version__ as COBRA_VERSION
@@ -126,6 +127,27 @@ except Exception:
     _core_analyse_custom_model = None
     _core_load_sbml_upload = None
 
+try:
+    from myco_optima.sequence_io import (
+        DEFAULT_MAX_COMBINED_SEQUENCE_BYTES as _SEQUENCE_SESSION_MAX_BYTES,
+    )
+    from myco_optima.sequence_io import DEFAULT_MAX_SEQUENCE_BYTES as _SEQUENCE_MAX_BYTES
+    from myco_optima.sequence_io import SequenceIntakeError as _SequenceUploadError
+    from myco_optima.sequence_io import (
+        build_reconstruction_handoff as _core_build_reconstruction_handoff,
+    )
+    from myco_optima.sequence_io import load_fasta_upload as _core_load_fasta_upload
+    from myco_optima.sequence_io import pair_fasta_inspections as _core_pair_fasta_inspections
+
+    SEQUENCE_UPLOAD_AVAILABLE = True
+except Exception:
+    _SEQUENCE_MAX_BYTES = 100_000_000
+    _SEQUENCE_SESSION_MAX_BYTES = 150_000_000
+    _SequenceUploadError = ValueError
+    _core_build_reconstruction_handoff = None
+    _core_load_fasta_upload = None
+    _core_pair_fasta_inspections = None
+
 
 def _plain(value: Any) -> Any:
     """Convert typed core results into JSON-friendly Python objects."""
@@ -172,6 +194,14 @@ def _load_custom_model(filename: str, payload: bytes) -> Any:
     return _core_load_sbml_upload(payload, filename)
 
 
+def _load_sequence(filename: str, payload: bytes | bytearray | memoryview) -> Any:
+    """Inspect one FASTA payload without sharing it across user sessions."""
+
+    if not SEQUENCE_UPLOAD_AVAILABLE or _core_load_fasta_upload is None:
+        raise RuntimeError("The FASTA sequence loader is unavailable.")
+    return _core_load_fasta_upload(payload, filename)
+
+
 _CUSTOM_ANALYSIS_STATE_KEYS = (
     "custom_analysis",
     "custom_analysis_signature",
@@ -190,6 +220,14 @@ _CUSTOM_WIDGET_PREFIXES = (
     "custom_fva_reactions_",
     "custom_fva_fraction_",
 )
+_CUSTOM_UPLOAD_WIDGET_PREFIXES = ("custom_sbml_",)
+_SEQUENCE_STATE_KEYS = (
+    "sequence_inspections",
+    "sequence_active_upload_identity",
+    "sequence_inspection_identity",
+    "sequence_inspection_identities",
+)
+_SEQUENCE_WIDGET_PREFIXES = ("sequence_fna_", "sequence_faa_")
 
 
 def _clear_custom_analysis_state() -> None:
@@ -197,13 +235,24 @@ def _clear_custom_analysis_state() -> None:
         st.session_state.pop(key, None)
 
 
-def _clear_custom_model_state() -> None:
+def _clear_custom_model_state(*, clear_widgets: bool = False) -> None:
     _clear_custom_analysis_state()
     for key in _CUSTOM_INSPECTION_STATE_KEYS:
         st.session_state.pop(key, None)
     for key in list(st.session_state):
-        if key.startswith(_CUSTOM_WIDGET_PREFIXES):
+        if key.startswith(_CUSTOM_WIDGET_PREFIXES) or (
+            clear_widgets and key.startswith(_CUSTOM_UPLOAD_WIDGET_PREFIXES)
+        ):
             st.session_state.pop(key, None)
+
+
+def _clear_sequence_state(*, clear_widgets: bool = False) -> None:
+    for key in _SEQUENCE_STATE_KEYS:
+        st.session_state.pop(key, None)
+    if clear_widgets:
+        for key in list(st.session_state):
+            if key.startswith(_SEQUENCE_WIDGET_PREFIXES):
+                st.session_state.pop(key, None)
 
 
 # -----------------------------------------------------------------------------
@@ -1079,6 +1128,433 @@ def _download_pair(
         )
 
 
+def _sequence_metadata(inspection: Any) -> dict[str, Any]:
+    """Return the bounded, JSON-safe metadata supplied by the sequence core."""
+
+    metadata = inspection.metadata() if hasattr(inspection, "metadata") else inspection
+    plain = _plain(metadata)
+    return plain if isinstance(plain, dict) else {}
+
+
+def _sequence_field(metadata: dict[str, Any], *names: str, default: Any = None) -> Any:
+    for name in names:
+        if name in metadata:
+            return metadata[name]
+    return default
+
+
+def _sequence_preview(inspection: Any) -> pd.DataFrame:
+    metadata = _sequence_metadata(inspection)
+    raw_preview = _sequence_field(metadata, "preview", "record_preview", default=[])
+    if hasattr(inspection, "preview"):
+        raw_preview = _plain(inspection.preview(limit=20))
+    rows = raw_preview if isinstance(raw_preview, list) else []
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return pd.DataFrame(columns=["Record ID", "Description", "Length"])
+    return frame.rename(
+        columns={
+            "id": "Record ID",
+            "record_id": "Record ID",
+            "identifier": "Record ID",
+            "description": "Description",
+            "length": "Length",
+            "gc_percent": "GC (%)",
+        }
+    )
+
+
+def _render_sequence_workspace() -> None:
+    """Render session-local FNA/FAA intake without exposing solver controls."""
+
+    st.subheader("Nucleotide / protein FASTA intake")
+    st.markdown(
+        "Bring nucleotide sequences (`.fna`), protein sequences (`.faa`), or both "
+        "files together. This route validates and inventories sequences for "
+        "a reconstruction handoff; it does **not** annotate them or build a metabolic model."
+    )
+    st.warning(
+        "FBA and FVA need reaction stoichiometry, bounds and an objective. Use an "
+        "external annotation and GEM-reconstruction workflow, curate its result, then "
+        "return here and upload the resulting SBML model."
+    )
+
+    if not SEQUENCE_UPLOAD_AVAILABLE:
+        st.error(
+            "The FASTA intake module is unavailable in this installation. Install the "
+            "project dependencies and restart Streamlit."
+        )
+        return
+
+    upload_key = st.session_state.get("sequence_upload_key", 0)
+    with st.container(border=True):
+        st.markdown("#### Nucleotide input")
+        uploaded_fna = st.file_uploader(
+            "Nucleotide FASTA (.fna)",
+            type=["fna"],
+            accept_multiple_files=False,
+            max_upload_size=int(_SEQUENCE_MAX_BYTES / 1_000_000),
+            key=f"sequence_fna_{upload_key}",
+            help=(f"One UTF-8 FASTA file, up to {_SEQUENCE_MAX_BYTES / 1_000_000:.0f} MB."),
+        )
+        fna_content = st.radio(
+            "FNA content declaration",
+            ["Genome assembly", "Coding sequences (CDS)"],
+            horizontal=True,
+            key=f"sequence_fna_content_{upload_key}",
+            help=(
+                "Choose what the records represent. Assembly contig identifiers are not "
+                "treated as protein identifiers."
+            ),
+        )
+    with st.container(border=True):
+        st.markdown("#### Protein input")
+        uploaded_faa = st.file_uploader(
+            "Protein FASTA (.faa)",
+            type=["faa"],
+            accept_multiple_files=False,
+            max_upload_size=int(_SEQUENCE_MAX_BYTES / 1_000_000),
+            key=f"sequence_faa_{upload_key}",
+            help=(f"One UTF-8 FASTA file, up to {_SEQUENCE_MAX_BYTES / 1_000_000:.0f} MB."),
+        )
+        st.caption(
+            "If this came from an annotation workflow, keep that provenance with the "
+            "handoff. Co-uploading files "
+            "does not prove that a nucleotide record encodes a protein record."
+        )
+
+    st.caption(
+        f"Session intake budget: one FNA and one FAA, each up to "
+        f"{_SEQUENCE_MAX_BYTES / 1_000_000:.0f} MB "
+        f"({_SEQUENCE_SESSION_MAX_BYTES / 1_000_000:.0f} MB combined). Files remain in this "
+        "Streamlit session and are never sent to Anthropic."
+    )
+
+    uploads = {"fna": uploaded_fna, "faa": uploaded_faa}
+    active_uploads = {kind: upload for kind, upload in uploads.items() if upload is not None}
+    if not active_uploads:
+        if st.session_state.get("sequence_active_upload_identity") is not None:
+            _clear_sequence_state()
+        st.info("Upload an `.fna`, an `.faa`, or both to create a sequence inventory.")
+        return
+
+    oversized = []
+    for kind, upload in active_uploads.items():
+        upload_size = getattr(upload, "size", None)
+        if upload_size is not None and upload_size > _SEQUENCE_MAX_BYTES:
+            oversized.append(f".{kind} ({upload_size / 1_000_000:.1f} MB)")
+    if oversized:
+        _clear_sequence_state()
+        st.error(
+            "Upload exceeds the per-file sequence limit: "
+            + ", ".join(oversized)
+            + f". Maximum: {_SEQUENCE_MAX_BYTES / 1_000_000:.0f} MB each."
+        )
+        return
+
+    payloads = {kind: upload.getbuffer() for kind, upload in active_uploads.items()}
+    if sum(len(payload) for payload in payloads.values()) > _SEQUENCE_SESSION_MAX_BYTES:
+        _clear_sequence_state()
+        st.error("The combined FNA/FAA payload exceeds the 150 MB session intake budget.")
+        return
+
+    file_identities = {
+        kind: {
+            "filename": active_uploads[kind].name,
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "bytes": len(payload),
+        }
+        for kind, payload in payloads.items()
+    }
+    upload_identity = {
+        "fna_content": fna_content if "fna" in active_uploads else None,
+        "files": file_identities,
+    }
+    st.session_state.sequence_active_upload_identity = upload_identity
+
+    cached_inspections = st.session_state.get("sequence_inspections", {})
+    cached_identities = st.session_state.get("sequence_inspection_identities", {})
+    if not isinstance(cached_inspections, dict):
+        cached_inspections = {}
+    if not isinstance(cached_identities, dict):
+        cached_identities = {}
+    inspections: dict[str, Any] = {}
+    successful_identities: dict[str, Any] = {}
+    changed_kinds = [
+        kind for kind in active_uploads if cached_identities.get(kind) != file_identities[kind]
+    ]
+    for kind in active_uploads:
+        if kind not in changed_kinds and kind in cached_inspections:
+            inspections[kind] = cached_inspections[kind]
+            successful_identities[kind] = file_identities[kind]
+
+    if changed_kinds:
+        with st.spinner("Validating FASTA records…"):
+            for kind in changed_kinds:
+                try:
+                    inspections[kind] = _load_sequence(active_uploads[kind].name, payloads[kind])
+                    successful_identities[kind] = file_identities[kind]
+                except _SequenceUploadError as exc:
+                    st.error(_display_text(str(exc), max_chars=300))
+                except Exception as exc:
+                    st.error(
+                        f"The .{kind} upload could not be inspected safely "
+                        f"({type(exc).__name__}). Check the FASTA structure."
+                    )
+    st.session_state.pop("sequence_inspection_identity", None)
+    if inspections:
+        st.session_state.sequence_inspections = inspections
+        st.session_state.sequence_inspection_identities = successful_identities
+    else:
+        st.session_state.pop("sequence_inspections", None)
+        st.session_state.pop("sequence_inspection_identities", None)
+
+    if not inspections:
+        return
+
+    pair_status = "Co-uploaded FNA + FAA" if len(inspections) == 2 else "Single sequence input"
+    _model_notice(
+        "Validated sequence intake",
+        f"{pair_status}. This is an inventory and reconstruction handoff, not a GEM.",
+    )
+    st.subheader("Sequence inventory")
+
+    inventory_rows: list[dict[str, Any]] = []
+    preview_frames: list[pd.DataFrame] = []
+    for kind in ("fna", "faa"):
+        if kind not in inspections:
+            continue
+        inspection = inspections[kind]
+        metadata = _sequence_metadata(inspection)
+        record_count = int(
+            _sequence_field(
+                metadata,
+                "sequence_count" if kind == "fna" else "protein_count",
+                "record_count",
+                default=0,
+            )
+        )
+        total_residues = int(
+            _sequence_field(
+                metadata,
+                "total_bp" if kind == "fna" else "total_aa",
+                "total_residues",
+                default=0,
+            )
+        )
+        minimum_length = int(_sequence_field(metadata, "minimum_length", "min_length", default=0))
+        maximum_length = int(_sequence_field(metadata, "maximum_length", "max_length", default=0))
+        median_length = float(_sequence_field(metadata, "median_length", default=0.0))
+        gc_percent = _sequence_field(metadata, "gc_percent", "gc_content_percent")
+        n_percent = _sequence_field(metadata, "n_percent")
+        n50 = _sequence_field(metadata, "n50")
+        ambiguous_fraction = _sequence_field(metadata, "ambiguous_residue_fraction")
+        terminal_stops = _sequence_field(
+            metadata, "terminal_stop_marker_count", "terminal_stop_count"
+        )
+        filename = str(_sequence_field(metadata, "filename", default=active_uploads[kind].name))
+        sha256 = str(
+            _sequence_field(
+                metadata,
+                "sha256",
+                default=upload_identity["files"][kind]["sha256"],
+            )
+        )
+        role = fna_content if kind == "fna" else "Protein sequences"
+        role_label = f"User-declared {role.lower()}" if kind == "fna" else role
+
+        with st.container(border=True):
+            st.markdown(f"#### {'.fna' if kind == 'fna' else '.faa'} · {role_label}")
+            st.text(f"File: {_display_text(filename)}")
+            st.text(f"SHA-256: {sha256}")
+            metric_row_one = st.columns(2)
+            metric_row_two = st.columns(2)
+            metric_row_one[0].metric(
+                "Nucleotide records" if kind == "fna" else "Protein records",
+                f"{record_count:,}",
+            )
+            metric_row_one[1].metric(
+                "Total bases" if kind == "fna" else "Amino acids",
+                f"{total_residues:,}",
+            )
+            metric_row_two[0].metric("Shortest record", f"{minimum_length:,}")
+            metric_row_two[1].metric("Longest record", f"{maximum_length:,}")
+            if kind == "fna":
+                gc_label = f"{float(gc_percent):.2f}%" if gc_percent is not None else "n/a"
+                length_statistic = (
+                    f"Assembly N50: {int(n50 or 0):,} · "
+                    if fna_content == "Genome assembly"
+                    else ""
+                )
+                st.caption(
+                    f"Median length: {median_length:,.1f} bases · "
+                    f"{length_statistic}GC: {gc_label} · N: {float(n_percent or 0):.2f}%"
+                )
+                if fna_content == "Genome assembly":
+                    st.caption(
+                        "Assembly N50 is a sequence-length contiguity statistic, not completeness."
+                    )
+            else:
+                st.caption(
+                    f"Median length: {median_length:,.1f} amino acids · "
+                    f"Ambiguous residues: {float(ambiguous_fraction or 0):.2%} · "
+                    f"Terminal stop markers: {int(terminal_stops or 0):,}"
+                )
+            for warning in metadata.get("warnings", []):
+                st.warning(_display_text(warning, max_chars=300))
+
+        row = {
+            "Input": kind.upper(),
+            "Declared role": role,
+            "Filename": filename,
+            "SHA-256": sha256,
+            "Bytes": upload_identity["files"][kind]["bytes"],
+            "Records": record_count,
+            "Total residues": total_residues,
+            "Minimum length": minimum_length,
+            "Maximum length": maximum_length,
+            "Median length": median_length,
+            "GC (%)": float(gc_percent) if gc_percent is not None else None,
+            "N (%)": float(n_percent) if n_percent is not None else None,
+            "Assembly N50": (
+                int(n50)
+                if kind == "fna" and fna_content == "Genome assembly" and n50 is not None
+                else None
+            ),
+            "Ambiguous residue fraction": (
+                float(ambiguous_fraction) if ambiguous_fraction is not None else None
+            ),
+            "Terminal stop markers": int(terminal_stops) if terminal_stops is not None else None,
+        }
+        inventory_rows.append(row)
+        preview = _sequence_preview(inspection)
+        if not preview.empty:
+            preview.insert(0, "Input", kind.upper())
+            preview_frames.append(preview)
+
+    with st.expander("Bounded record preview", expanded=True):
+        if preview_frames:
+            st.dataframe(
+                pd.concat(preview_frames, ignore_index=True),
+                hide_index=True,
+                width="stretch",
+            )
+            st.caption("Only a bounded preview is shown; sequence residues are not displayed.")
+        else:
+            st.info("The validated files did not provide preview rows.")
+
+    relationship: dict[str, Any] = {
+        "status": "co-uploaded" if len(inspections) == 2 else "single-input",
+        "claim": "No sequence linkage, annotation or gene–protein mapping is inferred.",
+    }
+    pair_inspection = None
+    handoff_error = False
+    if len(inspections) == 2 and _core_pair_fasta_inspections is not None:
+        try:
+            pair_inspection = _core_pair_fasta_inspections(
+                inspections["fna"],
+                inspections["faa"],
+                nucleotide_role=("cds" if fna_content == "Coding sequences (CDS)" else "assembly"),
+            )
+            if fna_content == "Coding sequences (CDS)":
+                overlap_count = int(pair_inspection.syntactic_id_overlap_count)
+                relationship["exact_identifier_overlap"] = overlap_count
+                relationship["exact_identifier_overlap_preview"] = list(
+                    pair_inspection.syntactic_id_overlap_preview
+                )
+                st.caption(
+                    f"Exact record-ID overlap: {overlap_count:,}. This string comparison "
+                    "uses the case-sensitive first token after `>` and does not establish "
+                    "annotation or biological linkage."
+                )
+        except _SequenceUploadError as exc:
+            handoff_error = True
+            st.error(_display_text(str(exc), max_chars=300))
+        except Exception as exc:
+            handoff_error = True
+            st.error(f"The paired handoff could not be validated safely ({type(exc).__name__}).")
+
+    inventory_frame = pd.DataFrame(inventory_rows)
+    manifest = {
+        "schema_version": "1.0",
+        "handoff": "external-fungal-gem-reconstruction",
+        "relationship": relationship,
+        "fna_content_declaration": fna_content if "fna" in inspections else None,
+        "files": [
+            _sequence_metadata(inspections[kind]) for kind in ("fna", "faa") if kind in inspections
+        ],
+        "generated_at": datetime.now(UTC).isoformat(),
+        "app_version": APP_VERSION,
+        "next_step": (
+            "Annotate and reconstruct externally; curate the resulting network and upload "
+            "an explicitly bounded SBML model before FBA/FVA."
+        ),
+        "limitations": [
+            "No annotation, metabolic reconstruction or gap filling was performed.",
+            "No species, gene–protein mapping, morphology or metabolic capability was inferred.",
+            "Sequence files were not sent to Anthropic.",
+        ],
+    }
+    if _core_build_reconstruction_handoff is not None and not handoff_error:
+        try:
+            if pair_inspection is not None:
+                core_manifest = _core_build_reconstruction_handoff(pair_inspection)
+            else:
+                single_kind, single_inspection = next(iter(inspections.items()))
+                handoff_kwargs = (
+                    {
+                        "nucleotide_role": (
+                            "cds" if fna_content == "Coding sequences (CDS)" else "assembly"
+                        )
+                    }
+                    if single_kind == "fna"
+                    else {}
+                )
+                core_manifest = _core_build_reconstruction_handoff(
+                    single_inspection, **handoff_kwargs
+                )
+            core_payload = (
+                core_manifest.to_dict()
+                if hasattr(core_manifest, "to_dict")
+                else _plain(core_manifest)
+            )
+            if isinstance(core_payload, dict):
+                manifest = {
+                    **core_payload,
+                    "export_context": {
+                        "generated_at": datetime.now(UTC).isoformat(),
+                        "app_version": APP_VERSION,
+                        "relationship_label": relationship["status"],
+                    },
+                }
+        except _SequenceUploadError as exc:
+            handoff_error = True
+            st.error(_display_text(str(exc), max_chars=300))
+        except Exception as exc:
+            handoff_error = True
+            st.error(
+                f"The reconstruction handoff could not be serialized safely ({type(exc).__name__})."
+            )
+    st.subheader("Reconstruction handoff")
+    st.dataframe(inventory_frame, hide_index=True, width="stretch")
+    if handoff_error:
+        st.warning("Downloads are disabled until the sequence handoff validates cleanly.")
+    else:
+        _download_pair(inventory_frame, "myco-optima_sequence_handoff", manifest)
+
+    with st.expander("What happens next?"):
+        st.markdown(
+            "1. Run organism-appropriate annotation and draft GEM reconstruction outside "
+            "Myco Optima.\n2. Review gene–protein–reaction rules, gaps, biomass composition "
+            "and exchange bounds.\n3. Export the curated model as SBML.\n4. Return to the "
+            "**Metabolic model (SBML)** route for FBA/FVA."
+        )
+        if st.button("Forget sequence uploads"):
+            _clear_sequence_state(clear_widgets=True)
+            st.session_state.sequence_upload_key = upload_key + 1
+            st.rerun()
+
+
 def _model_notice(source: str, note: str | None = None) -> None:
     is_demo = "demo" in source.lower()
     detail = note or (
@@ -1211,7 +1687,7 @@ with st.sidebar:
     else:
         st.warning("Demo model active")
     st.caption(CORE_IMPORT_NOTE)
-    st.caption("v0.2 · Edinburgh BioHackathon 2026")
+    st.caption("v0.3 · Edinburgh BioHackathon 2026")
 
 
 # Pages -----------------------------------------------------------------------
@@ -1278,11 +1754,35 @@ if page == "Overview":
 
 elif page == "Custom Model":
     _page_intro(
-        "Bring your own reconstruction",
-        "Custom SBML model",
-        "Upload a COBRA-compatible SBML file, review its structure and choose an "
-        "objective before running bounded FBA and FVA. The model is parsed by this app "
-        "and is never sent to the optional interpretation service automatically.",
+        "Bring your own biological input",
+        "Custom model and sequence intake",
+        "Start from a COBRA-compatible SBML reconstruction, or inventory nucleotide and "
+        "protein FASTA files for an external reconstruction handoff. Both routes are "
+        "session-local and are never sent to the optional interpretation service automatically.",
+    )
+
+    custom_input_route = st.radio(
+        "Custom input type",
+        ["Metabolic model (SBML)", "Nucleotide / protein FASTA"],
+        horizontal=True,
+        help="FASTA intake does not run flux analysis; only a reconstructed SBML model can do that.",
+        key="custom_input_route",
+    )
+    previous_input_route = st.session_state.get("custom_input_route_applied")
+    if previous_input_route != custom_input_route:
+        if custom_input_route == "Nucleotide / protein FASTA":
+            _clear_custom_model_state(clear_widgets=True)
+        else:
+            _clear_sequence_state(clear_widgets=True)
+        st.session_state.custom_input_route_applied = custom_input_route
+    if custom_input_route == "Nucleotide / protein FASTA":
+        _render_sequence_workspace()
+        st.stop()
+
+    st.subheader("Metabolic model (SBML)")
+    st.caption(
+        "Upload an explicitly bounded reconstruction, review its objective, then run FBA "
+        "and a bounded reaction subset for FVA."
     )
 
     if not MODEL_UPLOAD_AVAILABLE:
@@ -1297,6 +1797,7 @@ elif page == "Custom Model":
                 "Upload SBML",
                 type=["xml", "sbml"],
                 accept_multiple_files=False,
+                max_upload_size=int(_CUSTOM_MODEL_MAX_BYTES / 1_000_000),
                 key=f"custom_sbml_{st.session_state.get('custom_upload_key', 0)}",
                 help=(
                     f"Uncompressed UTF-8 SBML only. Maximum size: "
@@ -1321,7 +1822,15 @@ elif page == "Custom Model":
             if st.session_state.get("custom_active_upload_identity") is not None:
                 _clear_custom_model_state()
         else:
-            payload = uploaded_model.getvalue()
+            upload_size = getattr(uploaded_model, "size", None)
+            if upload_size is not None and upload_size > _CUSTOM_MODEL_MAX_BYTES:
+                _clear_custom_model_state()
+                st.error(
+                    f"The SBML upload exceeds the {_CUSTOM_MODEL_MAX_BYTES / 1_000_000:.0f} MB "
+                    "custom-model limit. Sequence uploads use a separate intake route."
+                )
+                st.stop()
+            payload = uploaded_model.getbuffer()
             upload_identity = {
                 "filename": uploaded_model.name,
                 "sha256": hashlib.sha256(payload).hexdigest(),
@@ -1715,7 +2224,7 @@ elif page == "Custom Model":
             with st.expander("Upload validation details"):
                 st.json(inspection.metadata(), expanded=False)
                 if st.button("Forget this upload"):
-                    _clear_custom_model_state()
+                    _clear_custom_model_state(clear_widgets=True)
                     st.session_state.custom_upload_key = (
                         st.session_state.get("custom_upload_key", 0) + 1
                     )
