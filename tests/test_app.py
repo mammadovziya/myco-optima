@@ -82,6 +82,19 @@ def test_all_pages_render_with_connected_core():
         _open_page(app, page)
 
 
+def test_overview_shows_the_reproduced_real_model_case_study():
+    app = _app()
+    metrics = {metric.label: metric.value for metric in app.metric}
+
+    assert metrics["Candidate grid"] == "81"
+    assert metrics["Follow-up plan"] == "15"
+    assert metrics["Reactions"] == "2,320"
+    assert metrics["Metabolites"] == "1,818"
+    assert metrics["Genes"] == "1,325"
+    assert metrics["Passed cases"] == "373 / 471"
+    assert any("not independent biological validation" in block.value for block in app.caption)
+
+
 def test_custom_sbml_upload_reaches_fba_and_fva_results():
     app = _open_page(_app(), "Custom Model")
     assert app.file_uploader[0].proto.max_upload_size_mb == 5
@@ -394,6 +407,7 @@ def test_sensitivity_page_emits_exact_box_behnken_design():
         "centre replicate": 3,
     }
     assert "Phosphate availability" in design
+    assert any("full three-factor quadratic" in block.value for block in app.info)
 
 
 def test_supported_gene_rule_reaches_the_ui():

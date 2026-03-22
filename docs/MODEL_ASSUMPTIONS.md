@@ -42,6 +42,18 @@ rules; they do not change reaction rates in FBA.
 | *Trichoderma reesei* | cellulase and biorefining | glucose, xylose, glycerol | the bundled COBRA surrogate does not encode cellulase induction |
 | *Fusarium venenatum* | mycoprotein and biomass | glucose, xylose, maltose | sparse gene-rule evidence; media heuristics only |
 
+## Published iJB1325 case study
+
+The real-model case study is separate from the four teaching models. It uses the
+published iJB1325 reconstruction for *A. niger* ATCC 1015 and preserves the
+publisher's SBML by checksum. Our COBRApy runner reproduces the paper's result:
+373 of 471 embedded consistency tests pass.
+
+Those cases helped the authors build and curate iJB1325. Matching them verifies
+our test runner and model handling, but it is not an independent validation or a
+79.2% biological accuracy score. The case, source and exact result are in
+[`case_studies/aspergillus_niger_iJB1325`](../case_studies/aspergillus_niger_iJB1325/README.md).
+
 ## FBA, FVA and sensitivity
 
 FBA maximises the selected pseudo-objective at steady state. FVA then reports the
@@ -118,17 +130,20 @@ review. Only its resulting, explicitly bounded SBML model belongs in the custom
 solver route. Pairing FNA and FAA improves the handoff context but does not close
 that modelling gap by itself.
 
-## How “about 80 runs to 15” is calculated
+## How the 81 to 15 plan is built
 
 Four factors at three levels produce 3⁴ = 81 candidate conditions. Myco Optima
 ranks those factors by absolute model sensitivity, retains the top three, and
-creates a 15-run Box–Behnken follow-up design: 12 interaction-edge conditions and
-three centre replicates. In other words, the tool narrows an 81-condition search
-space to a 15-run first follow-up plan (an 81.5% reduction).
+creates a 15-run Box-Behnken follow-up: 12 interaction-edge conditions and three
+centre runs. This reduces the proposed first follow-up from 81 conditions to 15.
 
 That is an experimental-prioritisation claim, not evidence that 66 biological
 experiments are universally unnecessary. Replication, randomisation, blocks,
 controls and later validation still belong in the real protocol.
+
+The design-matrix checks and deliberately synthetic response benchmark are
+documented in [DOE_VALIDATION.md](DOE_VALIDATION.md). They verify the software's
+statistical construction and its limits, not biological performance.
 
 ## Gene–media morphology rules
 

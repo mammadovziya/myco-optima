@@ -1,0 +1,44 @@
+{
+  "model": "iJB1325",
+  "strain": "Aspergillus niger ATCC 1015",
+  "source_sha256": "c8f55761d925aa2b532e0b3279d740de29c5cd444ebc1aff0b38d26e007a5ea3",
+  "source_size_bytes": 6676295,
+  "reactions": 2320,
+  "metabolites": 1818,
+  "genes": 1325,
+  "compartments": 7,
+  "embedded_tests": 471,
+  "passed": 373,
+  "failed": 98,
+  "pass_rate_percent": 79.2,
+  "paper_reported_passed": 373,
+  "paper_reported_failed": 98,
+  "paper_result_reproduced": true,
+  "growth_media_cases": 392,
+  "deletion_phenotype_cases": 73,
+  "system_check_cases": 6,
+  "compatibility_attributes_removed": 3738,
+  "outcome_margin": 0.01,
+  "default_glucose_scenario": {
+    "status": "optimal",
+    "biomass_objective": 0.9398547241493161,
+    "glucose_flux": -10.0,
+    "oxygen_flux": -7.778196990496574,
+    "fva_fraction_of_optimum": 0.95,
+    "biomass_fva": {
+      "minimum": 0.892861987941801,
+      "maximum": 0.939854724149265
+    },
+    "glucose_fva": {
+      "minimum": -10.0,
+      "maximum": -9.500000000000558
+    },
+    "oxygen_fva": {
+      "minimum": -14.48707755022598,
+      "maximum": -6.419287140971237
+    }
+  },
+  "source_url": "https://media.springernature.com/original/springer-static/esm/art%3A10.1186%2Fs40694-018-0060-7/MediaObjects/40694_2018_60_MOESM2_ESM.xml",
+  "paper_url": "https://doi.org/10.1186/s40694-018-0060-7",
+  "interpretation": "Reproduction of the published phenotype consistency benchmark. The embedded cases informed model curation and are not an independent validation or a measure of biological accuracy."
+}

@@ -4,9 +4,9 @@
 
 # Myco Optima
 
-Myco Optima is a small fungal fermentation modelling tool built for the Pacifico Biolabs challenge at Edinburgh BioHackathon 2026.
+Myco Optima is a small fungal fermentation modelling prototype created by Ziya Mammadov and Ibrahim Ayvazov for the Pacifico Biolabs challenge at Edinburgh BioHackathon 2026.
 
-I wanted to make metabolic modelling easier to use for fermentation engineers who do not work with COBRA models every day. The app uses Python, COBRApy and Streamlit to turn media choices into readable FBA, FVA, sensitivity and experiment planning results.
+We built it to make metabolic modelling easier to explore for fermentation engineers who do not work with COBRA models every day. The app uses Python, COBRApy and Streamlit to turn media choices into readable FBA, FVA, sensitivity and experiment planning results.
 
 ## See it in action
 
@@ -25,9 +25,17 @@ The app includes demonstration models for four industrial fungi:
 - *Trichoderma reesei*
 - *Fusarium venenatum*
 
-You can change carbon, nitrogen, oxygen and mineral availability, then compare predicted growth, yield and limiting nutrients. Sensitivity analysis ranks the most useful variables and builds a 15-run Box-Behnken follow-up design. A full three-level screen of four factors would contain 81 conditions, so this gives the lab a much smaller place to start.
+You can change carbon, nitrogen, oxygen and mineral availability, then compare model-derived biomass flux, yield ratio and nutrient sensitivity. Sensitivity analysis ranks four candidate factors, keeps the top three and builds a 15-run Box-Behnken follow-up from an 81-condition reference space.
+
+Tests confirm that the canonical coded template has balanced levels and a full-rank three-factor quadratic model matrix. A negative control shows that it cannot recover an effect from the excluded fourth factor. These are software checks, not biological validation. See [docs/DOE_VALIDATION.md](docs/DOE_VALIDATION.md).
 
 There is also a gene-media explorer for simple morphology hypotheses. Its results come from explicit rules and should be treated as experimental leads, not confirmed biological outcomes.
+
+## Published model case study
+
+The repository includes the published iJB1325 genome-scale reconstruction for *Aspergillus niger* ATCC 1015. It contains 2,320 reactions, 1,818 metabolites, 1,325 genes and 471 embedded test cases.
+
+Our COBRApy runner reproduced the [paper's result](https://doi.org/10.1186/s40694-018-0060-7): 373 of 471 cases passed. Because these cases informed model curation, this checks compatibility with the published workflow, not independent biological accuracy. See the [full case study](case_studies/aspergillus_niger_iJB1325/README.md).
 
 ## Using your own files
 
@@ -67,7 +75,7 @@ pytest
 ruff check .
 ```
 
-The test suite covers optimisation, FVA, sensitivity rankings, the 15-run design, morphology rules, SBML validation, FASTA uploads and export safety. GitHub Actions runs it on Python 3.11 and 3.12.
+The test suite covers optimisation, FVA, the published-model reproduction, DoE construction, morphology rules, SBML validation, FASTA uploads and export safety. GitHub Actions runs it on Python 3.11 and 3.12.
 
 You can also run the project with Docker:
 
@@ -78,10 +86,10 @@ docker run --rm -p 8501:8501 myco-optima
 
 More detail about the model assumptions and biological limits is in [docs/MODEL_ASSUMPTIONS.md](docs/MODEL_ASSUMPTIONS.md).
 
-## Project context
+## Built by
 
-This project was created for the [Pacifico Biolabs challenge](https://biohackathon-edinburgh-2026.devpost.com/) at Edinburgh BioHackathon 2026.
+Ziya Mammadov and Ibrahim Ayvazov created Myco Optima together for the [Pacifico Biolabs challenge](https://biohackathon-edinburgh-2026.devpost.com/) at Edinburgh BioHackathon 2026.
 
-It uses [COBRApy](https://cobrapy.readthedocs.io/) for constraint-based modelling, [Streamlit](https://streamlit.io/) for the interface, and the Anthropic Python SDK for optional explanations.
+All numerical results come from deterministic code. Claude is optional and only explains results that have already been calculated.
 
 Myco Optima is an independent open-source prototype and is not an official Pacifico Biolabs product. It is available under the [MIT License](LICENSE).

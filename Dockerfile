@@ -6,9 +6,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends libexpat1 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 COPY assets ./assets
+COPY case_studies ./case_studies
 COPY .streamlit ./.streamlit
 COPY app.py ./app.py
 

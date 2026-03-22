@@ -38,7 +38,7 @@ SEQUENCE_UPLOAD_AVAILABLE = False
 try:
     from myco_optima import __version__ as APP_VERSION
 except Exception:
-    APP_VERSION = "0.3.0"
+    APP_VERSION = "0.4.0"
 
 try:
     from cobra import __version__ as COBRA_VERSION
@@ -1687,7 +1687,7 @@ with st.sidebar:
     else:
         st.warning("Demo model active")
     st.caption(CORE_IMPORT_NOTE)
-    st.caption("v0.3 · Edinburgh BioHackathon 2026")
+    st.caption(f"v{APP_VERSION} · Edinburgh BioHackathon 2026")
 
 
 # Pages -----------------------------------------------------------------------
@@ -1696,20 +1696,19 @@ if page == "Overview":
     _page_intro(
         "Model workspace",
         "Fungal fermentation, from model to experiment",
-        "Choose a curated fungal surrogate or bring a COBRA-compatible SBML reconstruction. "
-        "Use one traceable workspace to inspect feasible flux, rank media constraints and "
-        "prepare a focused follow-up design.",
+        "Explore a transparent teaching model or bring a COBRA-compatible SBML reconstruction. "
+        "Inspect feasible flux, rank media constraints and plan a focused follow-up.",
     )
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        _card("Fungal chassis", "4", "Industrial reference organisms")
+        _card("Teaching fungi", "4", "Reduced models")
     with col2:
-        _card("Suggested DoE", "~15", "From an ~80-run broad screen")
+        _card("Candidate grid", "81", "Four factors at three levels")
     with col3:
-        _card("Analysis modes", "FBA + FVA", "Growth and solution flexibility")
+        _card("Follow-up plan", "15", "12 edges + 3 centre runs")
     with col4:
-        _card("Workflow", "Minutes", "From medium to ranked hypotheses")
+        _card("Analysis", "FBA + FVA", "Biomass and flux ranges")
 
     st.subheader("Curated starting models")
     st.caption("Fast, transparent teaching surrogates for exploring the workflow.")
@@ -1719,6 +1718,31 @@ if page == "Overview":
             st.markdown(f"**_{fungus['name']}_**")
             st.caption(fungus["role"])
             st.write(f"{fungus['temperature']:.0f} °C · pH {fungus['ph']:.1f}")
+
+    st.subheader("Published model check")
+    with st.container(border=True):
+        st.markdown("**iJB1325 · _Aspergillus niger_ ATCC 1015**")
+        st.write(
+            "We ran the model's 471 embedded test cases in COBRApy and matched the "
+            "paper's result: 373 passed."
+        )
+        case_col1, case_col2, case_col3, case_col4 = st.columns(4)
+        with case_col1:
+            st.metric("Reactions", "2,320")
+        with case_col2:
+            st.metric("Metabolites", "1,818")
+        with case_col3:
+            st.metric("Genes", "1,325")
+        with case_col4:
+            st.metric("Passed cases", "373 / 471")
+        st.caption(
+            "These cases informed construction of the source model. Matching them checks "
+            "runner compatibility, not independent biological validation."
+        )
+        st.link_button(
+            "Read the source paper",
+            "https://doi.org/10.1186/s40694-018-0060-7",
+        )
 
     workflow_col, context_col = st.columns([1.35, 1])
     with workflow_col:
@@ -2411,7 +2435,8 @@ elif page == "Sensitivity & DoE":
     _page_intro(
         "Experiment prioritisation",
         "Sensitivity & Design of Experiments",
-        "Spend experimental capacity where the model is most responsive. Rankings narrow a broad screen into a compact, testable design—not a substitute for replication.",
+        "Rank factors by local model response, then build a compact follow-up plan. "
+        "The plan still needs replication and lab validation.",
     )
     settings = _shared_settings()
     run_count = 15
@@ -2471,8 +2496,11 @@ elif page == "Sensitivity & DoE":
         st.plotly_chart(_plot_layout(fig, 405), width="stretch", config={"displayModeBar": False})
 
     st.markdown("### Prioritised experimental matrix")
-    st.caption(
-        "Exact three-factor Box–Behnken follow-up: 12 edge conditions plus three centre replicates."
+    st.caption("Three-factor Box-Behnken follow-up: 12 unique edges plus three centre runs.")
+    st.info(
+        "The canonical coded template is balanced and supports a full three-factor "
+        "quadratic model. A synthetic check also shows that it misses effects from the "
+        "excluded fourth factor. These are software checks, not biological validation."
     )
     st.dataframe(
         doe,
@@ -2487,8 +2515,10 @@ elif page == "Sensitivity & DoE":
                 "model": "scientific core + deterministic design adapter"
                 if sensitivity_is_core
                 else "demo reduced-order model",
-                "broad_screen_reference": 81,
-                "recommended_runs": run_count,
+                "candidate_grid_conditions": 81,
+                "follow_up_runs": run_count,
+                "canonical_design_template_checked": True,
+                "validation_scope": "coded three-factor Box-Behnken template",
                 "requires_replication": True,
             },
             "sensitivity": sensitivity.to_dict(orient="records"),
@@ -2496,7 +2526,9 @@ elif page == "Sensitivity & DoE":
         },
     )
     st.caption(
-        "The 81-run reference is a four-factor, three-level grid. The design keeps the top three local-sensitivity factors; replication and validation remain required."
+        "The 81-condition reference grid has four factors at three levels. This plan keeps "
+        "the three highest-ranked factors. Randomisation, independent replicates and controls "
+        "still belong in the lab protocol."
     )
 
 elif page == "Gene–Media Explorer":
@@ -2821,7 +2853,9 @@ elif page == "Interpretation & Methods":
     with about_col:
         st.markdown("### About myco-optima")
         st.write(
-            "Built for the Edinburgh BioHackathon 2026 with the Pacifico Biolabs challenge context, myco-optima makes constraint-based fungal modelling approachable to engineers who do not work with genome-scale models every day."
+            "Ziya Mammadov and Ibrahim Ayvazov built Myco Optima for the Pacifico Biolabs "
+            "challenge at Edinburgh BioHackathon 2026. Deterministic code calculates every "
+            "result. Claude only explains a result when the user asks."
         )
         st.markdown("`Python` · `COBRApy` · `Streamlit` · `Plotly` · `Anthropic API`")
         st.caption(
