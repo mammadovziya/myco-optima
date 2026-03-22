@@ -1,66 +1,39 @@
 <p align="center">
-  <img src="assets/myco-optima-wordmark.svg" alt="myco-optima" width="520">
-</p>
-
-<p align="center">
-  A fungal fermentation optimisation workbench built with Python, COBRApy, Streamlit and an optional Claude explanation layer.
+  <img src="assets/myco-optima-wordmark.svg" alt="Myco Optima" width="520">
 </p>
 
 # Myco Optima
 
-I started Myco Optima around a fairly ordinary fermentation problem: media
-optimisation is powerful, but the modelling tools used to do it are often built
-for people who already know how to read a metabolic network. At the Edinburgh
-BioHackathon 2026, Pacifico Biolabs posed almost exactly that challenge—make
-genome-scale metabolic modelling useful to non-specialists working on strain and
-media optimisation.
+Myco Optima is a small fungal fermentation modelling tool built for the Pacifico Biolabs challenge at Edinburgh BioHackathon 2026.
 
-This repository is the usable, documented version of that one-day idea. You can
-choose an industrial fungus, change the available carbon, nitrogen, oxygen and
-minerals, run FBA/FVA, see which inputs matter most, and turn that sensitivity
-ranking into a 15-run follow-up experiment. If you already have a COBRA model,
-you can upload its SBML file and inspect its objective, exchanges, FBA solution
-and a bounded set of FVA ranges. If you are earlier in the modelling process,
-you can instead bring nucleotide sequences (`.fna`), protein sequences (`.faa`),
-or both. The app inventories those sequences and prepares a
-traceable reconstruction handoff; it does not pretend that a FASTA file is
-already a metabolic model. There is also a small gene–media module for
-exploring morphology hypotheses, because “more biomass” is not much help if the
-resulting broth is impossible to mix.
+I wanted to make metabolic modelling easier to use for fermentation engineers who do not work with COBRA models every day. The app uses Python, COBRApy and Streamlit to turn media choices into readable FBA, FVA, sensitivity and experiment planning results.
 
-The honest version: the four models bundled here are transparent reduced-order
-surrogates, not validated genome-scale reconstructions. They make the workflow
-runnable without downloading licensed or strain-specific GEMs. The application
-is ready for exploration and teaching; a real process decision still needs a
-curated model, fitted uptake bounds and wet-lab validation.
+## What it does
 
-## What is in the app
+The app includes demonstration models for four industrial fungi:
 
-The interface is intentionally built from Streamlit's own forms, metrics, tabs,
-tables and status messages. It feels like a modelling workbench rather than a
-generated landing page, and it stays usable on a narrow screen.
+- *Aspergillus niger*
+- *Aspergillus oryzae*
+- *Trichoderma reesei*
+- *Fusarium venenatum*
 
-- **Media Optimiser** runs a cost-aware media search and reports predicted
-  growth, yield, limiting nutrients, FBA fluxes and 95%-optimal FVA ranges.
-- **Custom Model** has two deliberately separate routes. One validates an SBML
-  reconstruction and runs FBA/FVA against a chosen objective. The other accepts
-  `.fna` and `.faa` FASTA files, checks and inventories their records, and exports
-  a handoff manifest for an external genome-scale reconstruction workflow.
-- **Sensitivity & DoE** perturbs the current medium, ranks the levers by local
-  elasticity, and creates a downloadable follow-up design.
-- **Gene–Media Explorer** combines explicit, cited regulatory rules with media
-  context to return a qualitative morphology tendency and the full rule trace.
-- **Interpretation & Methods** documents the modelling boundary and can,
-  optionally, ask Claude to explain an already-computed result in plain language.
-  It cannot alter any numerical result.
-- **Exports** are available as CSV and JSON so the interesting part can leave
-  the dashboard and become an actual lab conversation.
+You can change carbon, nitrogen, oxygen and mineral availability, then compare predicted growth, yield and limiting nutrients. Sensitivity analysis ranks the most useful variables and builds a 15-run Box-Behnken follow-up design. A full three-level screen of four factors would contain 81 conditions, so this gives the lab a much smaller place to start.
 
-The four demonstration profiles are *Aspergillus niger*, *Aspergillus oryzae*,
-*Trichoderma reesei* and *Fusarium venenatum*. They cover organic-acid/enzyme,
-food fermentation, cellulase and mycoprotein use cases respectively.
+There is also a gene-media explorer for simple morphology hypotheses. Its results come from explicit rules and should be treated as experimental leads, not confirmed biological outcomes.
 
-## Run it locally
+## Using your own files
+
+The Custom Model page accepts SBML, FNA and FAA files.
+
+An SBML model can be used for FBA and selected-reaction FVA after it passes the model checks.
+
+FNA and FAA uploads follow a different path. The app validates the FASTA file, counts records and residues, shows a short preview, and creates an inventory and reconstruction handoff. It does not annotate sequences or build a metabolic model from them.
+
+FBA and FVA need a curated stoichiometric model with reaction bounds and an objective. If you start with FNA or FAA files, reconstruct and curate the model in a dedicated tool, export it as SBML, then upload that SBML file here.
+
+The included fungal models are reduced teaching models. They are useful for exploring the workflow, but they are not substitutes for strain-specific reconstructions or wet-lab validation.
+
+## Run locally
 
 Python 3.11 or 3.12 is recommended.
 
@@ -69,185 +42,38 @@ git clone https://github.com/mammadovziya/myco-optima.git
 cd myco-optima
 
 python -m venv .venv
-source .venv/bin/activate                    # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 python -m pip install -e '.[dev]'
 
 streamlit run app.py
 ```
 
-Open [http://localhost:8501](http://localhost:8501). The whole modelling
-workflow works without an API key.
+Open [http://localhost:8501](http://localhost:8501).
 
-For the optional Claude interpretation tab, use `.env.example` as a reference
-and export `ANTHROPIC_API_KEY` before starting Streamlit. On macOS/Linux:
+The modelling features work without an API key. Claude is only used for optional plain-language explanations of results that have already been calculated. To enable it, set `ANTHROPIC_API_KEY` before starting the app.
 
-```bash
-export ANTHROPIC_API_KEY="your-key-here"
-streamlit run app.py
-```
-
-Do not put a real key in the repository or in `.streamlit/config.toml`.
-
-## A useful first run
-
-If you just want to see whether the project works, leave the default organism
-and objective selected, then:
-
-1. Open **Media Optimiser**, keep the starting medium, and run the analysis.
-2. Look at the FVA chart. A wide range means the model can route flux in several
-   equally good ways; it is not an error bar.
-3. Open **Sensitivity & DoE** and generate the 15-run plan.
-4. In **Gene–Media Explorer**, choose a supported perturbation such as *A. niger*
-   `racA` knock-down. Expand the trace to see exactly which rule fired.
-5. Download the design as CSV. That file—not the dashboard—is the natural handoff
-   for protocol planning.
-
-## Bringing your own biological input
-
-The **Custom Model** workspace begins by asking what you actually have.
-
-If it is a metabolic reconstruction, upload an uncompressed UTF-8 `.xml` or
-`.sbml` file up to 5 MB. The app shows the model inventory first, keeps the
-uploaded objective selected by default, and asks you to choose the small set of
-reactions that actually need FVA. The full flux table and a provenance record
-can then be downloaded without involving Claude.
-
-If you have sequences instead, upload one nucleotide FASTA (`.fna`), one protein
-FASTA (`.faa`), or the two as a user-declared co-upload. Each file may be up to
-100 MB and accepted processing is capped at 150 MB for the pair. A public
-deployment should still set concurrency and memory limits appropriate to its
-host, because uploaded files live in each active Streamlit session.
-The app validates the FASTA structure, reports record and residue counts, shows a
-bounded record preview, and lets you download an inventory and handoff manifest.
-Those exports include file hashes so the inputs can be traced into a later model.
-
-A FASTA upload does **not** run FBA or FVA. Sequence files contain bases or amino
-acids, not a stoichiometric reaction network, flux bounds or an objective. Use a
-dedicated annotation and metabolic-reconstruction workflow, curate the resulting
-GEM, export it as SBML, and then return to the SBML route in Myco Optima. The
-sequence handoff is there to make that boundary useful and traceable, not to
-claim that reconstruction happened inside this app.
-
-I made this boundary deliberately strict. Uploads with DTD/entity declarations,
-implicit or dangling flux bounds, a missing objective, non-finite parameters, or
-more than 20,000 reactions are rejected before optimisation. Custom FVA is capped
-at 50 reactions per run and the solver receives a 30-second timeout where the
-installed solver supports one.
-
-An uploaded model does **not** inherit the bundled fungal assumptions. The app
-will not run the curated cost optimiser, media sensitivity ranking or morphology
-rules against an arbitrary reconstruction because the exchange mapping and
-biological evidence would be unknown. Those features remain attached to the four
-transparent teaching models.
-
-## Where the “about 80 runs to 15” comes from
-
-A naive screen of four media/process factors at three levels contains 3⁴ = 81
-conditions. Myco Optima uses the model sensitivity result to retain the three
-highest-leverage factors, then lays out a three-factor Box–Behnken design:
-
-- 12 interaction-edge conditions;
-- 3 replicated centre conditions; and
-- 15 runs in total, an 81.5% reduction from the original candidate grid.
-
-This is deliberately phrased as a **follow-up design**. It prioritises the first
-experiments; it does not prove that the other conditions can never be useful.
-Biological replicates, controls, blocking and confirmation runs still need to be
-chosen for the real organism and process.
-
-## How the calculation is split up
-
-```mermaid
-flowchart LR
-    A["Organism + medium bounds"] --> B["Reduced-order COBRA model"]
-    K["Uploaded SBML"] --> L["Bound + objective preflight"]
-    P["Uploaded FNA and/or FAA"] --> Q["Sequence validation + inventory"]
-    Q --> R["External GEM reconstruction + curation"]
-    R --> K
-    L --> M["Custom-model copy"]
-    B --> C["FBA optimum"]
-    B --> D["95%-optimal FVA ranges"]
-    M --> N["Custom FBA"]
-    M --> O["Selected-reaction FVA"]
-    B --> E["One-factor sensitivity"]
-    E --> F["Top three controllable factors"]
-    F --> G["15-run Box–Behnken design"]
-    A --> H["Evidence-coded gene/media rules"]
-    H --> I["Qualitative morphology hypothesis"]
-    C --> J["Optional Claude explanation"]
-    D --> J
-    E --> J
-```
-
-The separation is intentional. COBRApy owns the linear optimisation. The
-morphology module owns its small deterministic rule table. Claude only receives
-structured outputs after those calculations are complete; it is never used to
-invent fluxes, fill missing evidence or change a ranking.
-
-More detail—including exchange-bound semantics, FVA interpretation and the
-papers behind the gene rules—is in
-[docs/MODEL_ASSUMPTIONS.md](docs/MODEL_ASSUMPTIONS.md).
-
-## Repository map
-
-```text
-app.py                         Streamlit interface and download flows
-src/myco_optima/catalog.py     organism and nutrient configuration
-src/myco_optima/models.py      reduced-order COBRA model builder
-src/myco_optima/optimization.py FBA, FVA, sensitivity and media search
-src/myco_optima/model_io.py    validated custom SBML loading and analysis
-src/myco_optima/sequence_io.py bounded FASTA validation and handoff metadata
-src/myco_optima/exports.py     safe CSV and strict JSON serialization
-src/myco_optima/doe.py         sensitivity-guided Box–Behnken design
-src/myco_optima/gene_media.py  explicit morphology rule engine
-src/myco_optima/ai.py          optional Anthropic interpretation boundary
-tests/                         deterministic scientific and safety tests
-docs/MODEL_ASSUMPTIONS.md      assumptions, evidence and limitations
-```
-
-## Tests and reproducibility
+## Tests
 
 ```bash
 pytest
 ruff check .
 ```
 
-The tests check more than imports. They cover nutrient essentiality, deterministic
-FBA and sensitivity rankings, valid FVA bounds, medium immutability, the exact
-12-edge/3-centre experimental design, known morphology rules, unknown-gene
-behaviour, and the optional Anthropic client boundary. GitHub Actions runs the
-suite on Python 3.11 and 3.12. Upload tests also cover malformed XML, unsafe
-entities, missing bounds, oversized networks, objective selection, solver failure
-and copy-safe custom FBA/FVA. Sequence-intake tests cover nucleotide and protein
-files, paired handoffs, malformed replacements, clearing and session isolation;
-they also assert that a FASTA upload never exposes solver controls or flux results.
+The test suite covers optimisation, FVA, sensitivity rankings, the 15-run design, morphology rules, SBML validation, FASTA uploads and export safety. GitHub Actions runs it on Python 3.11 and 3.12.
 
-For a container instead:
+You can also run the project with Docker:
 
 ```bash
 docker build -t myco-optima .
 docker run --rm -p 8501:8501 myco-optima
 ```
 
-## Things I would do next
+More detail about the model assumptions and biological limits is in [docs/MODEL_ASSUMPTIONS.md](docs/MODEL_ASSUMPTIONS.md).
 
-The most important next step is not another chart. It is a reproducible,
-fungal-aware reconstruction workflow between the FASTA handoff and imported
-SBML, followed by proper exchange mapping and calibration with strain-specific
-uptake measurements. After that I would add saved projects, plate-layout
-exports, uncertainty from measured uptake ranges, and a comparison view between
-predicted and observed responses. Those features only become meaningful once
-real experimental data is available.
+## Project context
 
-## Context and credit
+This project was created for the [Pacifico Biolabs challenge](https://biohackathon-edinburgh-2026.devpost.com/) at Edinburgh BioHackathon 2026.
 
-The project responds to the
-[Pacifico Biolabs metabolic-modelling challenge](https://biohackathon-edinburgh-2026.devpost.com/)
-at Edinburgh BioHackathon 2026. It uses
-[COBRApy](https://cobrapy.readthedocs.io/) for constraint-based analysis,
-[Streamlit](https://streamlit.io/) for the interface, and the official
-[Anthropic Python SDK](https://platform.claude.com/docs/en/cli-sdks-libraries/sdks/python)
-for the optional explanation layer.
+It uses [COBRApy](https://cobrapy.readthedocs.io/) for constraint-based modelling, [Streamlit](https://streamlit.io/) for the interface, and the Anthropic Python SDK for optional explanations.
 
-Myco Optima is an independent open-source prototype and is not an official
-Pacifico Biolabs product. It is released under the [MIT License](LICENSE).
+Myco Optima is an independent open-source prototype and is not an official Pacifico Biolabs product. It is available under the [MIT License](LICENSE).
